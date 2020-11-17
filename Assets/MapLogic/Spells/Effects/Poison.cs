@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using UnityEngine;
+﻿using System.Collections.Generic;
 
 namespace SpellEffects
 {
@@ -73,7 +69,7 @@ namespace SpellEffects
         {
             Indicator = new MapProjectile(AllodsProjectile.PoisonSign, Unit);
             Indicator.ZOffset = 64;
-            MapLogic.Instance.Objects.Add(Indicator);
+            MapLogic.Instance.AddObject(Indicator, true);
         }
 
         public override void OnDisable()

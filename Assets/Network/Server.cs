@@ -433,16 +433,16 @@ public class Server
         SpawnProjectileSimple((int)id, source, x, y, z, animspeed, scale, start, end);
     }
 
-    public static void SpawnProjectileEOT(AllodsProjectile id, IPlayerPawn source, float x, float y, float z, int duration, int frequency, int startframes = 0, int endframes = 0, int zoffs = -128, MapProjectileCallback cb = null)
+    public static void SpawnProjectileEOT(AllodsProjectile id, IPlayerPawn source, float x, float y, float z, int duration, int frequency, int startframes = 0, int endframes = 0, int zoffs = -128, MapProjectileCallback cb = null, int lightlevel = -1)
     {
-        SpawnProjectileEOT((int)id, source, x, y, z, duration, frequency, startframes, endframes, zoffs, cb);
+        SpawnProjectileEOT((int)id, source, x, y, z, duration, frequency, startframes, endframes, zoffs, cb, lightlevel);
     }
 
     public static void SpawnProjectileHoming(int id, IPlayerPawn source, float x, float y, float z, MapUnit target, float speed, MapProjectileCallback cb = null)
     {
         MapProjectile proj = new MapProjectile(id, source, new MapProjectileLogicHoming(target, speed), cb);
         proj.SetPosition(x, y, z);
-        MapLogic.Instance.Objects.Add(proj);
+        MapLogic.Instance.AddObject(proj, true);
 
         if (NetworkManager.IsServer)
         {
@@ -483,7 +483,7 @@ public class Server
     {
         MapProjectile proj = new MapProjectile(id, source, new MapProjectileLogicDirectional(tgx, tgy, tgz, speed), cb);
         proj.SetPosition(x, y, z);
-        MapLogic.Instance.Objects.Add(proj);
+        MapLogic.Instance.AddObject(proj, true);
 
         if (NetworkManager.IsServer)
         {
@@ -526,7 +526,7 @@ public class Server
     {
         MapProjectile proj = new MapProjectile(id, source, new MapProjectileLogicSimple(animspeed, scale, start, end), null); // this is usually SFX like stuff. projectile plays animation based on typeid and stops.
         proj.SetPosition(x, y, z);
-        MapLogic.Instance.Objects.Add(proj);
+        MapLogic.Instance.AddObject(proj, true);
 
         if (NetworkManager.IsServer)
         {
@@ -569,7 +569,7 @@ public class Server
     {
         MapProjectile proj = new MapProjectile(AllodsProjectile.Lightning, source, new MapProjectileLogicLightning(target, color), cb);
         proj.SetPosition(x, y, z);
-        MapLogic.Instance.Objects.Add(proj);
+        MapLogic.Instance.AddObject(proj, true);
 
         if (NetworkManager.IsServer)
         {
@@ -605,12 +605,14 @@ public class Server
         }
     }
 
-    public static void SpawnProjectileEOT(int id, IPlayerPawn source, float x, float y, float z, int duration, int frequency, int startframes = 0, int endframes = 0, int zoffs = -128, MapProjectileCallback cb = null)
+    public static void SpawnProjectileEOT(int id, IPlayerPawn source, float x, float y, float z, int duration, int frequency, int startframes = 0, int endframes = 0, int zoffs = -128, MapProjectileCallback cb = null, int lightlevel = 0)
     {
         MapProjectile proj = new MapProjectile(id, source, new MapProjectileLogicEOT(duration, frequency, startframes, endframes), cb);
+        if (lightlevel != 0)
+            proj.LightLevel = lightlevel;
         proj.ZOffset = zoffs;
         proj.SetPosition(x, y, z);
-        MapLogic.Instance.Objects.Add(proj);
+        MapLogic.Instance.AddObject(proj, true);
 
         if (NetworkManager.IsServer)
         {
@@ -643,6 +645,7 @@ public class Server
                 app.StartFrames = startframes;
                 app.EndFrames = endframes;
                 app.ZOffset = zoffs;
+                app.LightLevel = lightlevel;
 
                 client.SendCommand(app);
             }
@@ -709,6 +712,24 @@ public class Server
         }
     }
 
+    public static void NotifyUnitPackedStats(MapUnit unit, UnitStats.ModifiedFlags flags)
+    {
+        foreach (ServerClient client in ServerManager.Clients)
+        {
+            if (client.State != ClientState.Playing)
+                continue;
+
+            Player p = MapLogic.Instance.GetNetPlayer(client);
+            if (unit.IsVisibleForNetPlayer(p))
+            {
+                ClientCommands.UnitPackedStats statsCmd;
+                statsCmd.Tag = unit.Tag;
+                statsCmd.PackedStats = unit.Stats.PackStats(flags);
+                client.SendCommand(statsCmd);
+            }
+        }
+    }
+
     public static void NotifyUnitFlags(MapUnit unit)
     {
         foreach (ServerClient client in ServerManager.Clients)
@@ -764,7 +785,7 @@ public class Server
         }
     }
 
-    public static void NotifyHumanLevelUp(MapHuman human, MapHuman.ExperienceSkill sk, int newexp)
+    public static void NotifyHumanLevelUp(MapHuman human, MapHuman.ExperienceSkill sk, int newexp, bool message)
     {
         foreach (ServerClient client in ServerManager.Clients)
         {
@@ -778,6 +799,7 @@ public class Server
                 lvlCmd.Tag = human.Tag;
                 lvlCmd.ExpAfter = newexp;
                 lvlCmd.Skill = sk;
+                lvlCmd.Message = message;
                 client.SendCommand(lvlCmd);
             }
         }
@@ -799,6 +821,65 @@ public class Server
                 summonCmd.SummonTime = unit.SummonTime;
                 client.SendCommand(summonCmd);
             }
+        }
+    }
+
+    public static void NotifyEnterShop(MapUnit unit, MapStructure shop)
+    {
+        if (NetworkManager.IsServer)
+        {
+            Player p = unit.Player;
+            if (p != null && p.NetClient != null && p.NetClient.State == ClientState.Playing)
+            {
+                ClientCommands.EnterShop enterShopCmd;
+                enterShopCmd.Tag = shop.Tag;
+                p.NetClient.SendCommand(enterShopCmd);
+            }
+        }
+        else if (!NetworkManager.IsClient)
+        {
+            // process locally
+            ClientCommands.EnterShop enterShopCmd;
+            enterShopCmd.Tag = shop.Tag;
+            enterShopCmd.Process();
+        }
+    }
+
+    public static void NotifyEnterInn(MapUnit unit, MapStructure shop)
+    {
+        if (NetworkManager.IsServer)
+        {
+            Player p = unit.Player;
+            if (p != null && p.NetClient != null && p.NetClient.State == ClientState.Playing)
+            {
+                ClientCommands.EnterInn enterInnCmd;
+                enterInnCmd.Tag = shop.Tag;
+                p.NetClient.SendCommand(enterInnCmd);
+            }
+        }
+        else if (!NetworkManager.IsClient)
+        {
+            // process locally
+            ClientCommands.EnterInn enterInnCmd;
+            enterInnCmd.Tag = shop.Tag;
+            enterInnCmd.Process();
+        }
+    }
+
+    public static void NotifyLeaveStructure(Player p)
+    {
+        if (NetworkManager.IsServer)
+        {
+            if (p.NetClient != null && p.NetClient.State == ClientState.Playing)
+            {
+                ClientCommands.LeaveStructure leaveStructureCmd;
+                p.NetClient.SendCommand(leaveStructureCmd);
+            }
+        }
+        else if (!NetworkManager.IsClient)
+        {
+            ClientCommands.LeaveStructure leaveStructureCmd;
+            leaveStructureCmd.Process();
         }
     }
 }

@@ -95,10 +95,9 @@ namespace Spells
             MapNode node = MapLogic.Instance.Nodes[TargetX, TargetY];
 
             // find any corpse at X/Y
-            // we cannot use regular cells for this... because dead unit is unlinked from world
-            for (int i = 0; i < MapLogic.Instance.Objects.Count; i++)
+            for (int i = 0; i < node.Objects.Count; i++)
             {
-                MapObject o = MapLogic.Instance.Objects[i];
+                MapObject o = node.Objects[i];
                 if (!(o is MapUnit))
                     continue;
                 MapUnit u = (MapUnit)o;
@@ -151,6 +150,7 @@ namespace Spells
                     unit.Player = Spell.User.Player;
                     unit.Tag = MapLogic.Instance.GetFreeUnitTag();
                     unit.SetPosition(TargetX, TargetY, false);
+                    unit.LinkToWorld();
                     if (!unit.Interaction.CheckWalkableForUnit(TargetX, TargetY, false))
                     {
                         // invalid position, don't add unit
@@ -164,7 +164,7 @@ namespace Spells
                     }
                     unit.CoreStats.HealthMax = (int)(u.CoreStats.HealthMax * raiseHpMult);
                     unit.UpdateItems();
-                    MapLogic.Instance.Objects.Add(unit);
+                    MapLogic.Instance.AddObject(unit, true);
 
                     u.BoneFrame = 4; // invisible corpse
                     u.DoUpdateView = true;
@@ -213,7 +213,39 @@ namespace Spells
             unit.SummonTimeMax = 30;
             unit.SummonTime = 0;
 
-            MapLogic.Instance.Objects.Add(unit);
+            MapLogic.Instance.AddObject(unit, true);
+            return false;
+        }
+    }
+
+    [SpellProcId(Spell.Spells.Heal)]
+    public class SpellProcHeal : SpellProc
+    {
+        public SpellProcHeal(Spell spell, int tgX, int tgY, MapUnit tgUnit) : base(spell, tgX, tgY, tgUnit) { }
+
+        public override bool Process()
+        {
+            if (TargetUnit == null)
+                return false;
+
+            SpellEffects.Effect eff = new SpellEffects.Heal(MapLogic.TICRATE, Spell.GetDamage());
+            TargetUnit.AddSpellEffects(eff);
+            return false;
+        }
+    }
+
+    [SpellProcId(Spell.Spells.Drain_Life)]
+    public class SpellProcDrainLife : SpellProc
+    {
+        public SpellProcDrainLife(Spell spell, int tgX, int tgY, MapUnit tgUnit) : base(spell, tgX, tgY, tgUnit) { }
+
+        public override bool Process()
+        {
+            if (TargetUnit == null)
+                return false;
+
+            SpellEffects.Effect eff = new SpellEffects.Drain(MapLogic.TICRATE, Spell.GetDamage(), Spell.User);
+            TargetUnit.AddSpellEffects(eff);
             return false;
         }
     }

@@ -38,7 +38,41 @@ public enum UnitFlags
     ProtectionAstral= 0x0040,
     Shield          = 0x0080,
     Bless           = 0x0100,
-    Curse           = 0x0200
+    Curse           = 0x0200,
+    Healing         = 0x0400,
+    Draining        = 0x0800,
+    PhasedOut       = 0x1000
+}
+
+public class MapUnitAggro
+{
+    public MapUnit Target;
+    public int LastDamage;
+    public int LastSeen;
+    public int CountDamage;
+    public float Damage;
+    public float Factor;
+
+    public MapUnitAggro(MapUnit target)
+    {
+        Target = target;
+        LastDamage = LastSeen = MapLogic.Instance.LevelTime;
+        CountDamage = 0;
+        Damage = 0;
+        Factor = 1f;
+    }
+
+    public float GetAggro()
+    {
+        if (CountDamage == 0)
+            return 0;
+        float baseAggro = Damage / CountDamage;
+        // rougly 10 seconds for 0.5 aggro factor here. defined by /5 at the end of timeFac
+        int curTime = MapLogic.Instance.LevelTime;
+        float timeFac = Mathf.Min(1f / ((curTime - LastDamage) / MapLogic.TICRATE / 5), 1f);
+        float fac = Mathf.Max(Factor, 1f); // increasing factor. not used right now, later may be used for tank mechanics
+        return baseAggro * fac * timeFac;
+    }
 }
 
 public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
@@ -65,7 +99,8 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
             if (_Player != null)
                 _Player.Objects.Remove(this);
             _Player = value;
-            _Player.Objects.Add(this);
+            if (_Player != null)
+                _Player.Objects.Add(this);
         }
     }
 
@@ -90,6 +125,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         }
     }
 
+    public bool IsBlocking { get; private set; } = true;
     public bool IsAlive = true;
     public bool IsDying = false;
     public List<IUnitAction> Actions = new List<IUnitAction>();
@@ -118,6 +154,14 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     // for summoned units
     public int SummonTime = 0;
     public int SummonTimeMax = 0;
+    // for respawn
+    public int SpawnX = -1;
+    public int SpawnY = -1;
+    public int LastSpawnX = -1;
+    public int LastSpawnY = -1;
+    // for AI
+    public int TargetX = -1;
+    public int TargetY = -1;
 
     private UnitFlags _Flags = UnitFlags.None;
     public UnitFlags Flags
@@ -166,9 +210,37 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     public readonly ScanrangeCalc VisionCalc = new ScanrangeCalc();
     public readonly UnitInteraction Interaction = null;
 
-    public readonly List<MapProjectile> TargetedBy = new List<MapProjectile>();
-
     public readonly List<Spell> SpellBook = new List<Spell>();
+
+    // AI stuff
+    public MapUnit Target { get; set; }
+    public readonly List<MapUnitAggro> Aggro = new List<MapUnitAggro>();
+    private Group _Group = null;
+    public Group Group
+    {
+        get
+        {
+            return _Group;
+        }
+
+        set
+        {
+            if (_Group != null)
+            {
+                if (_Group.Units.Contains(this))
+                    _Group.Units.Remove(this);
+            }
+            _Group = value;
+            if (_Group != null)
+            {
+                if (!_Group.Units.Contains(this))
+                    _Group.Units.Add(this);
+            }
+        }
+    }
+
+    // entering structures
+    public MapStructure CurrentStructure = null;
 
     public MapUnit()
     {
@@ -304,7 +376,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
             }
         }
 
-        UpdateItems();
+        OnUpdateItems();
     }
 
     public override void Dispose()
@@ -316,8 +388,11 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     }
 
     // this is called when on-body items or effects are modified
-    public virtual void UpdateItems()
+    protected virtual void OnUpdateItems()
     {
+        if (NetworkManager.IsClient)
+            return;
+
         // 
         float origHealth = (float)Stats.Health / Stats.HealthMax;
         float origMana = (float)Stats.Mana / Stats.ManaMax;
@@ -336,10 +411,149 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         DoUpdateInfo = true;
     }
 
+    public void UpdateItems()
+    {
+        UnitStats oldStats = Stats;
+        OnUpdateItems();
+
+        if (NetworkManager.IsServer)
+        {
+            UnitStats.ModifiedFlags statsChanged = oldStats.CompareStats(Stats);
+            if (statsChanged != 0)
+                Server.NotifyUnitPackedStats(this, statsChanged);
+        }
+    }
+
+    public bool CanDetectUnit(MapUnit other)
+    {
+        if (!other.IsLinked)
+            return false;
+        if (other.Flags.HasFlag(UnitFlags.Invisible) && !other.Player.Diplomacy[Player.ID].HasFlag(DiplomacyFlags.Vision))
+            return false;
+        return true;
+    }
+
+    // 0=cant see, 1=can see but not in vision, 2=can fully see
+    public int CanSeeUnit(MapUnit other)
+    {
+        if (!CanDetectUnit(other))
+            return 0;
+        // check x/y coords
+        int offsX = other.X - X;
+        int offsY = other.Y - Y;
+        if (offsX < -20 || offsX > 20 || offsY < -20 || offsY > 20)
+            return 1;
+        offsX += 20;
+        offsY += 20;
+        if (Vision[offsX, offsY])
+            return 2;
+        return 1;
+    }
+
+    public void UpdateAggro()
+    {
+        // first off, slowly tick aggro factors down
+        // and remove dead/unlinked units
+        for (int i = 0; i < Aggro.Count; i++)
+        {
+            MapUnitAggro ag = Aggro[i];
+            if (ag.Target == null || !ag.Target.IsAlive || !ag.Target.IsLinked)
+            {
+                // remove item
+                Aggro.RemoveAt(i);
+                i--;
+                continue;
+            }
+            if (ag.Factor > 1f)
+            {
+                ag.Factor = Mathf.Max(1f, ag.Factor - 0.5f / MapLogic.TICRATE); // factor falls by 0.5 per second, cannot be under 1
+            }
+            int sight = CanSeeUnit(ag.Target);
+            if (sight == 0)
+            {
+                // cannot target invisible units...
+                Aggro.RemoveAt(i);
+                i--;
+                continue;
+            }
+            if (sight == 2)
+            {
+                // unit is in sight area
+                ag.LastSeen = MapLogic.Instance.LevelTime;
+            }
+            // check if last seen a lot of time ago ( > 5 seconds for now)
+            if (MapLogic.Instance.LevelTime - ag.LastSeen > MapLogic.TICRATE * 5)
+            {
+                Aggro.RemoveAt(i);
+                i--;
+                continue;
+            }
+        }
+        // pick group target if we don't have our own, as lowest priority
+        if (Aggro.Count <= 0 && Group != null)
+        {
+            if (Group.SharedTarget != null && Group.SharedTarget.IsAlive && Group.SharedTarget.IsLinked)
+            {
+                MapUnitAggro newAg = new MapUnitAggro(Group.SharedTarget);
+                Aggro.Add(newAg);
+            }
+        }
+        Aggro.Sort((MapUnitAggro a1, MapUnitAggro a2) =>
+        {
+            float f1 = a1.GetAggro();
+            float f2 = a2.GetAggro();
+            if (f1 > f2) return -1;
+            if (f1 < f2) return 1;
+            return 0;
+        });
+        // check current target
+        Target = null;
+        if (Aggro.Count > 0)
+            Target = Aggro[0].Target;
+    }
+
+    public void UpdateAI()
+    {
+        if (!IsAlive || IsDying || !IsLinked)
+            return;
+
+        // if there is a target, chase and attack it
+        if (Target != null)
+        {
+            // check if we are currently doing attack state
+            if (!(States[States.Count-1] is AttackState))
+                SetState(new AttackState(this, Target));
+        }
+        else
+        {
+            // check if we are at our respawn point
+            if (X != LastSpawnX || Y != LastSpawnY)
+            {
+                if (!(States[States.Count - 1] is MoveState))
+                    SetState(new MoveState(this, LastSpawnX, LastSpawnY));
+            }
+        }
+
+        // rotate randomly
+        if ((UnityEngine.Random.Range(0, 256) < 1) &&
+            Actions.Count == 1) // unit is idle and 1/256 chance returns true
+        {
+            int angle = UnityEngine.Random.Range(0, 36) * 10;
+            AddActions(new RotateAction(this, angle));
+        }
+    }
+
     public override void Update()
     {
         if (Class == null)
             return;
+
+        // phased out unit does literally nothing
+        if (Flags.HasFlag(UnitFlags.PhasedOut))
+        {
+            UpdateNetVisibility();
+            return;
+        }
 
         // check summon timer
         if (SummonTimeMax > 0 && (MapLogic.Instance.LevelTime % MapLogic.TICRATE == 0))
@@ -368,6 +582,13 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
             }
         }
 
+        if (!NetworkManager.IsClient && Player.DoFullAI)
+        {
+            // process aggro list, pick new target if needed
+            UpdateAggro();
+            UpdateAI();
+        }
+
         // process actions
         while (!Actions.Last().Process())
             Actions.RemoveAt(Actions.Count - 1);
@@ -377,8 +598,9 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         {
             if (!SpellEffects[i].Process())
             {
-                SpellEffects[i].OnDetach();
+                global::SpellEffects.Effect ef = SpellEffects[i];
                 SpellEffects.RemoveAt(i);
+                ef.OnDetach();
                 i--;
             }
         }
@@ -425,7 +647,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
                 IsAlive = false;
                 IsDying = false;
                 DoUpdateView = true;
-                UnlinkFromWorld();
+                Unblock();
                 for (int i = 0; i < SpellEffects.Count; i++)
                     SpellEffects[i].OnDetach();
                 SpellEffects.Clear();
@@ -440,7 +662,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
 
             // health and mana regeneration
             // 1% per second * mana regeneration?
-            if (!NetworkManager.IsClient)
+            if (!NetworkManager.IsClient && !IsDying && IsAlive)
             {
                 if (MapLogic.Instance.LevelTime % 40 == 0)
                 {
@@ -510,74 +732,277 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         }
     }
 
+    public override void CheckAllocateObject()
+    {
+        if (GetVisibility() == 2)
+            AllocateObject();
+    }
+
     public override int GetVisibility()
     {
-        if (BoneFrame > 3)
+        if (BoneFrame > 3 || Flags.HasFlag(UnitFlags.PhasedOut))
             return 0;
         return base.GetVisibility();
     }
 
     public override MapNodeFlags GetNodeLinkFlags(int x, int y)
     {
+        if (!IsBlocking)
+            return 0;
         return IsFlying ? MapNodeFlags.DynamicAir : MapNodeFlags.DynamicGround;
     }
 
-    private int AstarNodesWalked = 0;
-    private int AstarLastX = -1;
-    private int AstarLastY = -1;
-    private List<Vector2i> AstarLastSolution;
-    private ShortestPathGraphSearch<Vector2i, Vector2i> AstarSearcher = null;
-    private UnitAstarHelper AstarSearcherH = null;
-    public List<Vector2i> DecideNextMove(int targetX, int targetY, bool staticOnly, float distance = 1)
+    // this abstracts between different pathfinding algorithms
+    private static List<Vector2i> CallPathfindingMethod(MapUnit unit, int x, int y, int toStartX, int toStartY, int toEndX, int toEndY, float distance, bool staticOnly, int limit = -1)
     {
-        if (AstarNodesWalked < 16 &&
-            AstarLastX == targetX && AstarLastY == targetY && AstarLastSolution != null &&
-            AstarNodesWalked+1 < AstarLastSolution.Count &&
-            AstarLastSolution.Count > 0 && Interaction.CheckWalkableForUnit(AstarLastSolution[AstarNodesWalked+1].x, AstarLastSolution[AstarNodesWalked+1].y, staticOnly))
+        switch (MapLogic.Instance.PathfindingType)
         {
-            if (AstarLastSolution[AstarNodesWalked].x == X &&
-                AstarLastSolution[AstarNodesWalked].y == Y)
+            case PathfindingType.Astar:
+                return new AstarPathfinder().FindPath(unit, x, y, toStartX, toStartY, toEndX, toEndY, distance, staticOnly, limit);
+            case PathfindingType.Flood:
+                List<Vector2i> p = MapLogic.Instance.Wizard.GetShortestPath(unit, staticOnly, distance, x, y, toStartX, toStartY, toEndX, toEndY, limit);
+                if (p != null && (p[0].x != x || p[0].y != y))
+                    p.Insert(0, new Vector2i(x, y));
+                return p;
+            default:
+                return null;
+        }
+    }
+
+    private int LastMoveTargetX = -1;
+    private int LastMoveTargetY = -1;
+    private int LastMoveTargetWidth = -1;
+    private int LastMoveTargetHeight = -1;
+    private float LastMoveDistance = 0;
+    private IEnumerator<Vector2i> LastPath = null;
+    private IEnumerator<Vector2i> Pathfind(int left, int top, int right, int bottom, float distance)
+    {
+        // for now generate astar path once
+        bool logPathfind = false;
+
+        if (logPathfind) Debug.LogFormat("Pathfind({2}): Started at {0}, {1}", X, Y, ID);
+        bool doRestart;
+        do
+        {
+            doRestart = false;
+            // main check: static only
+            List<Vector2i> nodes = CallPathfindingMethod(this, X, Y, left, top, right, bottom, distance, true);
+            if (nodes == null)
             {
-                AstarNodesWalked++;
-                List<Vector2i> npath = AstarLastSolution.Skip(AstarNodesWalked).ToList();
-                return npath;
+                while (true)
+                    yield return null;
+            }
+
+            // top loop: move along static list
+            for (int i = 1; i < nodes.Count; i++)
+            {
+                Vector2i node = nodes[i];
+
+                if (logPathfind) Debug.LogFormat("Pathfind({2}): Continued at {0}, {1}", node.x, node.y, ID);
+
+                // check if static node is not walkable
+                if (!Interaction.CheckWalkableForUnit(node.x, node.y, false) || Interaction.CheckDangerous(node.x, node.y))
+                {
+                    i--;
+                    node = nodes[i];
+                    // end try 1
+                    // try 2: find limited astar to next unblocked static cell
+                    // find LAST unblocked node that is contained inside 16x16 radius.
+                    // do same pathfinding as above then
+                    int lastFreeNode = -1;
+                    int lastNode = i + 1;
+                    while (lastNode < nodes.Count && Math.Abs(nodes[lastNode].x - X) < 16 && Math.Abs(nodes[lastNode].y - Y) < 16)
+                    {
+                        if (Interaction.CheckWalkableForUnit(nodes[lastNode].x, nodes[lastNode].y, false))
+                            lastFreeNode = lastNode;
+                        lastNode++;
+                    }
+
+                    if (logPathfind) Debug.LogFormat("Pathfind({3}): Trying to Find Node after {0}, {1} = {2}", node.x, node.y, lastFreeNode, ID);
+
+                    if (lastFreeNode < 0)
+                        lastFreeNode = nodes.Count - 1; // try final node
+
+                    if (logPathfind) Debug.LogFormat("Pathfind({4}): Choose Dynamic to Static at {0}, {1} (to {2}, {3})", node.x, node.y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, ID);
+
+                    // find path...
+                    // if not found, then we are blocked. try finding again until unblocked
+                    List<Vector2i> altNodes = (lastFreeNode == nodes.Count-1) ?
+                        CallPathfindingMethod(this, X, Y, left, top, right, bottom, 0, false, 16)
+                        :
+                        CallPathfindingMethod(this, X, Y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, 0, false, 16);
+                    bool pathfindSuccess = false;
+                    bool altDoRestart;
+                    do
+                    {
+                        altDoRestart = false;
+
+                        if (altNodes == null)
+                        {
+                            // find next node
+                            int nextFreeNode = -1;
+                            lastNode = lastFreeNode + 1;
+                            while (lastNode < nodes.Count && Math.Abs(nodes[lastNode].x - X) < 16 && Math.Abs(nodes[lastNode].y - Y) < 16)
+                            {
+                                if (Interaction.CheckWalkableForUnit(nodes[lastNode].x, nodes[lastNode].y, false))
+                                    nextFreeNode = lastNode;
+                                lastNode++;
+                            }
+
+                            if (lastFreeNode < 0)
+                                lastFreeNode = nodes.Count - 1;
+
+                            altNodes = (lastFreeNode == nodes.Count-1) ?
+                                CallPathfindingMethod(this, X, Y, left, top, right, bottom, 0, false, 16)
+                                :
+                                CallPathfindingMethod(this, X, Y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, nodes[lastFreeNode].x, nodes[lastFreeNode].y, 0, false, 16);
+
+                            if (altNodes == null && nextFreeNode >= 0)
+                            {
+                                // try with updated free node
+                                altNodes = (nextFreeNode == nodes.Count-1) ?
+                                    CallPathfindingMethod(this, X, Y, left, top, right, bottom, 0, false, 16)
+                                    :
+                                    CallPathfindingMethod(this, X, Y, nodes[nextFreeNode].x, nodes[nextFreeNode].y, nodes[nextFreeNode].x, nodes[nextFreeNode].y, 0, false, 16);
+                                if (altNodes != null)
+                                {
+                                    // if found path with nextFreeNode, but not with lastFreeNode, continue path this way...
+                                    lastFreeNode = nextFreeNode;
+                                }
+                            }
+
+                            if (altNodes == null)
+                            {
+                                yield return null; // pause for a bit to avoid infinite recursion
+
+                                if (X != node.x || Y != node.y) // if we lost dynamic path at some random point
+                                {
+                                    doRestart = true;
+                                    break;
+                                }
+
+                                // otherwise restart
+                                altDoRestart = true;
+                            }
+                        }
+
+                        if (altNodes != null)
+                        {
+                            for (int j = 1; j < altNodes.Count; j++)
+                            {
+                                Vector2i altNode = altNodes[j];
+
+                                if (logPathfind) Debug.LogFormat("Pathfind({2}): Dynamic to Static at {0}, {1}", altNode.x, altNode.y, ID);
+
+                                // path is not walkable, update dynamic
+                                if (!Interaction.CheckWalkableForUnit(altNode.x, altNode.y, true))
+                                {
+                                    if (logPathfind) Debug.LogFormat("Pathfind({2}): Dynamic to Static Obsolete at {0}, {1}", altNode.x, altNode.y, ID);
+                                    doRestart = true;
+                                    break;
+                                }
+
+                                yield return altNode;
+
+                                // Next node mismatch, unit teleported or otherwise broke
+                                if (X != altNode.x || Y != altNode.y)
+                                {
+                                    if (logPathfind) Debug.LogFormat("Pathfind({4}): Dynamic to Static Restarted ({0}!={1} or {2}!={3})", X, altNode.x, Y, altNode.y, ID);
+                                    doRestart = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!altDoRestart && !doRestart)
+                        {
+                            // we walked up to lastFreeNode
+                            i = lastFreeNode;
+                            if (logPathfind) Debug.LogFormat("Pathfind({2}): Drop Back To Static at {0}, {1}", nodes[i].x, nodes[i].y, ID);
+                            pathfindSuccess = true;
+                        }
+
+                        altNodes = null;
+                                
+                    }
+                    while (altDoRestart && !doRestart);
+
+                    if (pathfindSuccess)
+                    {
+                        // just do next 'i' node directly
+                        continue;
+                    }
+                }
+
+                // if something broke really seriously
+                if (doRestart)
+                    break;
+
+                yield return node; // use this node as next
+
+                // Next node mismatch, unit teleported or otherwise broke
+                if (X != node.x || Y != node.y)
+                {
+                    if (logPathfind) Debug.LogFormat("Pathfind({4}): Restarted ({0}!={1} or {2}!={3})", X, node.x, Y, node.y, ID);
+                    doRestart = true;
+                    break;
+                }
             }
         }
+        while (doRestart);
 
-        AstarNodesWalked = 16;
+        // return null path until changed
+        while (true)
+            yield return null;
+    }
 
-        if (distance < 1)
-            distance = 1;
+    public Vector2i DecideNextMove(int targetX, int targetY, int targetWidth, int targetHeight, float distance = 0)
+    {
+        if (distance < 0)
+            distance = 0;
 
-        // if targetX,targetY is blocked, refuse to pathfind.
-        if (!Interaction.CheckWalkableForUnit(targetX, targetY, staticOnly) && distance < 2)
-            return null;
+        int left = targetX;
+        int top = targetY;
+        int right = targetX;
+        int bottom = targetY;
 
-        // init astar searcher
-        if (AstarSearcherH == null)
-            AstarSearcherH = new UnitAstarHelper(this);
-        if (AstarSearcher == null)
-            AstarSearcher = new ShortestPathGraphSearch<Vector2i, Vector2i>(AstarSearcherH);
-        AstarSearcherH.StaticLookup = staticOnly;
-        AstarSearcherH.Distance = distance;
+        if (targetWidth > 0 || targetHeight > 0)
+        {
+            left -= 1;
+            top -= 1;
+            right += targetWidth;
+            bottom += targetHeight;
+        }
+
+        // start or restart pathfinding.
+        // or continue, if same path is being looked for
+        if (!(LastPath != null &&
+                targetX == LastMoveTargetX && targetY == LastMoveTargetY &&
+                targetWidth == LastMoveTargetWidth && targetHeight == LastMoveTargetHeight &&
+                distance == LastMoveDistance))
+        {
+            // generate new pathfinder enumerator
+            LastPath = Pathfind(left, top, right, bottom, distance);
+            LastMoveTargetX = targetX;
+            LastMoveTargetY = targetY;
+            LastMoveTargetWidth = targetWidth;
+            LastMoveTargetHeight = targetHeight;
+            LastMoveDistance = distance;
+        }
 
         try
         {
-            List<Vector2i> nodes = AstarSearcher.GetShortestPath(new Vector2i(X, Y), new Vector2i(targetX, targetY));
-            if (nodes == null)
-                return null;
-            nodes.Add(new Vector2i(targetX, targetY));
-            AstarNodesWalked = 0;
-            AstarLastX = targetX;
-            AstarLastY = targetY;
-            AstarLastSolution = nodes;
-            return nodes;
+            LastPath.MoveNext();
+            Vector2i node = LastPath.Current;
+            return node;
         }
-        catch (Exception)
+        catch (Exception e)
         {
+            Debug.LogError(e);
             return null;
         }
     }
+
 
     public int FaceCell(int x, int y)
     {
@@ -594,10 +1019,11 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
 
     public void SetPosition(int x, int y, bool netupdate)
     {
-        UnlinkFromWorld();
-        X = x;
-        Y = y;
-        if (IsAlive) LinkToWorld();
+        bool wasLinked = IsLinked;
+        if (IsLinked) UnlinkFromWorld();
+        TargetX = X = x;
+        TargetY = Y = y;
+        if (IsAlive && wasLinked) LinkToWorld();
         CalculateVision();
         DoUpdateView = true;
 
@@ -607,16 +1033,22 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
             if (NetworkManager.IsServer)
                 Server.NotifyUnitTeleport(this);
         }
+
+        if (SpawnX < 0 || SpawnY < 0)
+        {
+            SpawnX = LastSpawnX = x;
+            SpawnY = LastSpawnY = y;
+        }
     }
 
-    // sets random position for the unit. returns true if valid space was found
-    public bool RandomizePosition(int x, int y, int radius, bool netupdate)
+    // finds random position for the unit
+    public Vector2i FindRandomPosition(int x, int y, int radius)
     {
         if (radius < 0) radius = 0;
         if (radius == 0)
         {
-            SetPosition(x, y, netupdate);
-            return Interaction.CheckWalkableForUnit(x, y, false);
+            if (!Interaction.CheckWalkableForUnit(x, y, false))
+                return null;
         }
 
         int minX = Mathf.Max(x - radius - (Width - 1), 0);
@@ -638,12 +1070,22 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         // if no valid coords found, use center
         if (coords.Count == 0)
         {
-            SetPosition(x, y, netupdate);
-            return false;
+            if (!Interaction.CheckWalkableForUnit(x, y, false))
+                return null;
+            return new Vector2i(x, y);
         }
 
         // 
         Vector2i coord = coords[UnityEngine.Random.Range(0, coords.Count)];
+        return coord;
+    }
+
+    // sets random position for the unit. returns true if valid space was found
+    public bool RandomizePosition(int x, int y, int radius, bool netupdate)
+    {
+        Vector2i coord = FindRandomPosition(x, y, radius);
+        if (coord == null)
+            return false;
         SetPosition(coord.x, coord.y, netupdate);
         return true;
     }
@@ -674,8 +1116,22 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
 
     public void AddActions(params IUnitAction[] states)
     {
+        // hack: adding death action removes all other actions abruptly
+        bool isDeath = false;
+
+        int hadActions = Actions.Count;
         for (int i = 0; i < states.Length; i++)
+        {
+            if (states[i] is DeathAction)
+                isDeath = true;
             Actions.Add(states[i]);
+        }
+        
+        if (isDeath)
+        {
+            Actions.RemoveRange(1, hadActions - 1);
+        }
+
         if (NetworkManager.IsServer)
             Server.NotifyAddUnitActions(this, states);
     }
@@ -752,13 +1208,20 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
             // put excessive items back to pack
             Item newitem = new Item(item, 1);
             item.Count--;
-            ItemsPack.PutItem(ItemsPack.Count, item);
+            if (item.Parent == ItemsPack)
+                ItemsPack.PutItem(item.Index, item);
+            else ItemsPack.PutItem(ItemsPack.Count, item);
             item = newitem;
         }
 
         Item currentItem = GetItemFromBody(slot);
         if (currentItem != null)
-            ItemsPack.PutItem(ItemsPack.Count, ItemsBody.TakeItem(currentItem, 1));
+        {
+            int putAtOffset = ItemsPack.Count;
+            if (item.Parent == ItemsPack)
+                putAtOffset = Math.Min(item.Index, putAtOffset);
+            ItemsPack.PutItem(putAtOffset, ItemsBody.TakeItem(currentItem, 1));
+        }
 
         if (item.Class.Option.TwoHanded == 2)
         {
@@ -773,22 +1236,108 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         DoUpdateInfo = true;
     }
 
+    public void ValidatePosition(bool netupdate)
+    {
+        if (!Interaction.CheckWalkableForUnit(X, Y, false))
+        {
+            for (int radius = 1; radius < 6; radius++)
+            {
+                for (int lx = -radius; lx <= radius; lx++)
+                {
+                    for (int ly = -radius; ly <= radius; ly++)
+                    {
+                        if ((lx == -radius || lx == radius) && (ly == -radius || ly == radius))
+                        {
+                            if (Interaction.CheckWalkableForUnit(X + lx, Y + ly, false))
+                            {
+                                SetPosition(X + lx, Y + ly, netupdate);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     public void Respawn(int x, int y)
     {
+        // if cannot stand directly at these coordinates, try to find better ones
         X = x;
         Y = y;
+        ValidatePosition(false);
         Stats.Health = Stats.HealthMax;
         IsAlive = true;
         IsDying = false;
         VState = UnitVisualState.Idle;
-        LinkToWorld();
+        Block();
+        if (!IsLinked) LinkToWorld();
         if (NetworkManager.IsServer)
             Server.NotifyRespawn(this);
         DoUpdateView = true;
     }
 
+    public void Unblock()
+    {
+        if (!IsLinked)
+        {
+            IsBlocking = false;
+            return;
+        }
+
+        UnlinkFromWorld();
+        IsBlocking = false;
+        LinkToWorld();
+    }
+
+    public void Block()
+    {
+        if (!IsLinked)
+        {
+            IsBlocking = true;
+            return;
+        }
+
+        UnlinkFromWorld();
+        IsBlocking = true;
+        LinkToWorld();
+    }
+
     public int TakeDamage(DamageFlags flags, MapUnit source, int damagecount)
     {
+        MapUnitAggro ag = null;
+        // validate diplomacy: alliance will not attack even if attacked
+        if (!NetworkManager.IsClient && !Player.Diplomacy[source.Player.ID].HasFlag(DiplomacyFlags.Ally))
+        {
+            if (Player.DoFullAI)
+            {
+                for (int i = 0; i < Aggro.Count; i++)
+                {
+                    if (Aggro[i].Target == source)
+                    {
+                        ag = Aggro[i];
+                        break;
+                    }
+                }
+
+                if (ag == null)
+                {
+                    ag = new MapUnitAggro(source);
+                    Aggro.Add(ag);
+                }
+            }
+
+            // additionally, if this player is neutral, it will switch to Enemy if attacked
+            // and the attacking player will start being enemy as well
+            if (!Player.Diplomacy[source.Player.ID].HasFlag(DiplomacyFlags.Enemy))
+                Player.Diplomacy[source.Player.ID] |= DiplomacyFlags.Enemy;
+            if (!source.Player.Diplomacy[Player.ID].HasFlag(DiplomacyFlags.Ally))
+                source.Player.Diplomacy[Player.ID] |= DiplomacyFlags.Enemy;
+        }
+
+        if (ag != null)
+            ag.LastDamage = MapLogic.Instance.LevelTime;
+
         if (damagecount <= 0)
             return 0;
 
@@ -833,6 +1382,13 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         if ((flags & DamageFlags.Shooting) != 0)
             damagecount -= damagecount * Stats.ProtectionShooting / 100;
 
+        // apply damage to aggro
+        if (ag != null)
+        {
+            ag.CountDamage++;
+            ag.Damage += damagecount;
+        }
+
         if (Stats.TrySetHealth(Stats.Health - damagecount))
         {
             DoUpdateInfo = true;
@@ -851,25 +1407,25 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
                         expFactor *= 2;
                     MapHuman srcHuman = (MapHuman)source;
                     if ((flags & DamageFlags.Fire) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Fire, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Fire) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Fire, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Fire) + expFactor, true);
                     if ((flags & DamageFlags.Water) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Water, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Water) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Water, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Water) + expFactor, true);
                     if ((flags & DamageFlags.Air) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Air, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Air) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Air, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Air) + expFactor, true);
                     if ((flags & DamageFlags.Earth) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Earth, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Earth) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Earth, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Earth) + expFactor, true);
                     if ((flags & DamageFlags.Astral) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Astral, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Astral) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Astral, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Astral) + expFactor, true);
                     if ((flags & DamageFlags.Blade) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Blade, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Blade) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Blade, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Blade) + expFactor, true);
                     if ((flags & DamageFlags.Axe) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Axe, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Axe) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Axe, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Axe) + expFactor, true);
                     if ((flags & DamageFlags.Bludgeon) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Bludgeon, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Bludgeon) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Bludgeon, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Bludgeon) + expFactor, true);
                     if ((flags & DamageFlags.Pike) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Pike, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Pike) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Pike, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Pike) + expFactor, true);
                     if ((flags & DamageFlags.Shooting) != 0)
-                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Shooting, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Shooting) + expFactor);
+                        srcHuman.SetSkillExperience(MapHuman.ExperienceSkill.Shooting, srcHuman.GetSkillExperience(MapHuman.ExperienceSkill.Shooting) + expFactor, true);
                 }
             }
             return damagecount;
@@ -912,7 +1468,7 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
         Spell topSpell = null;
         foreach (Item item in ItemsPack)
         {
-            if ((item.Class.ItemID & 0xFFC0) != 0x0E00) // special/scrolls
+            if (!item.Class.IsScroll) // special/scrolls
                 continue;
             if (itemId != 0 && item.Class.ItemID != itemId)
                 continue;
@@ -974,5 +1530,28 @@ public class MapUnit : MapObject, IPlayerPawn, IVulnerable, IDisposable
     public virtual DamageFlags GetDamageType()
     {
         return DamageFlags.Raw;
+    }
+
+    public void PhaseOut()
+    {
+        if (Flags.HasFlag(UnitFlags.PhasedOut))
+            return;
+        Flags |= UnitFlags.PhasedOut;
+        DoUpdateView = true;
+        UnlinkFromWorld();
+        // do one last update... unlinked objects are not updated
+        if (GameScript is IObjectManualUpdate mu)
+            mu.OnUpdate();
+    }
+
+    public void PhaseIn()
+    {
+        if (!Flags.HasFlag(UnitFlags.PhasedOut))
+            return;
+        Flags &= ~UnitFlags.PhasedOut;
+        DoUpdateView = true;
+        if (!Interaction.CheckWalkableForUnit(X, Y, false))
+            RandomizePosition(X, Y, 2, true);
+        LinkToWorld();
     }
 }

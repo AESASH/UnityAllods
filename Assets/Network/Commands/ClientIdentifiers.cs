@@ -26,6 +26,7 @@ public enum ClientIdentifiers
     UnitPack,
     UnitStats,
     UnitStatsShort,
+    UnitPackedStats,
     UnitSpells,
     UnitFlags,
     UnitPosition,
@@ -46,5 +47,12 @@ public enum ClientIdentifiers
     AddProjectileEOT,
 
     // kill static object (i.e. trees)
-    StaticObjectDead
+    StaticObjectDead,
+
+    // shop, inn
+    EnterShop,
+    EnterInn,
+    LeaveStructure,
+    UpdateShop,
+    UpdateInn
 }

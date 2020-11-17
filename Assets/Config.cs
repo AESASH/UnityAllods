@@ -62,6 +62,35 @@ public class Config
         }
     }
 
+    public static bool cl_spritesb
+    {
+        get
+        {
+            return MapView.Instance.SpritesBEnabled;
+        }
+
+        set
+        {
+            MapView.Instance.SpritesBEnabled = value;
+            Save();
+        }
+    }
+
+    private static int _sv_pathfinding = 0;
+    public static int sv_pathfinding
+    {
+        get
+        {
+            return _sv_pathfinding;
+        }
+
+        set
+        {
+            _sv_pathfinding = value;
+            Save();
+        }
+    }
+
     public static void Save()
     {
         // write file with current values

@@ -212,6 +212,7 @@ namespace ClientCommands
             unit.IsAlive = IsAlive;
             unit.IsDying = IsDying;
             unit.SetPosition(X, Y, true);
+            unit.LinkToWorld();
             if (IsAvatar)
             {
                 unit.Player.Avatar = unit;
@@ -254,7 +255,7 @@ namespace ClientCommands
             }
 
             if (newUnit)
-                MapLogic.Instance.Objects.Add(unit);
+                MapLogic.Instance.AddObject(unit, true);
             else
             {
                 unit.DoUpdateView = true; // update view if unit already present on map (otherwise its automatically done)
@@ -371,6 +372,7 @@ namespace ClientCommands
                 // we can't expect ideal sync here.
                 // for this reason we don't just "add" state.
                 // we put it exactly where it was on server's side at the moment.
+                // ..except death which ends everything
                 int pPos = Math.Min(Position, unit.Actions.Count);
                 // reverse iteration
                 AddUnitAction[] States = new AddUnitAction[2] { State1, State2 };
@@ -405,7 +407,8 @@ namespace ClientCommands
                     if (States[i].Death != null)
                     {
                         States[i].Death.Unit = unit;
-                        unit.Actions.Insert(pPos, States[i].Death);
+                        unit.Actions.RemoveRange(1, unit.Actions.Count-1);
+                        unit.Actions.Add(States[i].Death);
                     }
                 }
             }
@@ -517,7 +520,7 @@ namespace ClientCommands
                     unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item(Pack[i]));
             }
 
-            unit.ItemsPack.Money = Money;
+            unit.Player.Money = Money;
             unit.DoUpdateInfo = true;
 
             return true;
@@ -592,6 +595,36 @@ namespace ClientCommands
     }
 
     [ProtoContract]
+    [NetworkPacketId(ClientIdentifiers.UnitPackedStats)]
+    public struct UnitPackedStats : IClientCommand
+    {
+        [ProtoMember(1)]
+        public int Tag;
+        [ProtoMember(2)]
+        public byte[] PackedStats;
+
+        public bool Process()
+        {
+            if (!MapLogic.Instance.IsLoaded)
+                return false;
+
+            MapUnit unit = MapLogic.Instance.GetUnitByTag(Tag);
+            if (unit == null)
+            {
+                Debug.LogFormat("Attempted to set packed stats for nonexistent unit {0}", Tag);
+                return true;
+            }
+
+            unit.Stats.MergePackedStats(PackedStats);
+            unit.CalculateVision();
+            unit.DoUpdateView = true;
+            unit.DoUpdateInfo = true;
+
+            return true;
+        }
+    }
+
+    [ProtoContract]
     [NetworkPacketId(ClientIdentifiers.UnitItemPickup)]
     public struct UnitItemPickup : IClientCommand
     {
@@ -610,7 +643,7 @@ namespace ClientCommands
             MapUnit unit = MapLogic.Instance.GetUnitByTag(Tag);
             if (unit == null)
             {
-                Debug.LogFormat("Attempted to set pick up with nonexistent unit {0}", Tag);
+                Debug.LogFormat("Attempted to pick up with nonexistent unit {0}", Tag);
                 return true;
             }
 
@@ -937,6 +970,8 @@ namespace ClientCommands
         public int EndFrames;
         [ProtoMember(10)]
         public int ZOffset;
+        [ProtoMember(11)]
+        public int LightLevel;
 
         public bool Process()
         {
@@ -959,7 +994,7 @@ namespace ClientCommands
                 }
             }
 
-            Server.SpawnProjectileEOT(TypeID, source, X, Y, Z, Duration, Duration, StartFrames, EndFrames, ZOffset);
+            Server.SpawnProjectileEOT(TypeID, source, X, Y, Z, Duration, Duration, StartFrames, EndFrames, ZOffset, null, LightLevel);
             return true;
         }
     }
@@ -983,13 +1018,13 @@ namespace ClientCommands
                     return false;
 
             MapNode node = MapLogic.Instance.Nodes[X, Y];
-            for (int i = 0; i < node.Objects.Count; i++)
+            foreach (MapObject mobj in node.Objects)
             {
                 // check object type.
-                if (node.Objects[i].GetObjectType() != MapObjectType.Obstacle)
+                if (mobj.GetObjectType() != MapObjectType.Obstacle)
                     continue;
 
-                MapObstacle ob = (MapObstacle)node.Objects[i];
+                MapObstacle ob = (MapObstacle)mobj;
                 ob.SetDead(false);
             }
 
@@ -1160,6 +1195,8 @@ namespace ClientCommands
         public MapHuman.ExperienceSkill Skill;
         [ProtoMember(3)]
         public int ExpAfter;
+        [ProtoMember(4)]
+        public bool Message;
 
         public bool Process()
         {
@@ -1174,7 +1211,74 @@ namespace ClientCommands
             }
 
             MapHuman human = (MapHuman)unit;
-            human.SetSkillExperience(Skill, ExpAfter);
+            human.SetSkillExperience(Skill, ExpAfter, Message);
+
+            return true;
+        }
+    }
+
+    [ProtoContract]
+    [NetworkPacketId(ClientIdentifiers.EnterShop)]
+    public struct EnterShop : IClientCommand
+    {
+        [ProtoMember(1)]
+        public int Tag;
+
+        public bool Process()
+        {
+            if (!MapLogic.Instance.IsLoaded)
+                return false;
+
+            MapStructure s = MapLogic.Instance.GetStructureByTag(Tag);
+            if (s == null || s.Class == null || !s.Class.Usable)
+            {
+                Debug.LogFormat("Attempted to enter nonexistent building {0}", Tag);
+                return false;
+            }
+
+            ShopScreen screen = Utils.CreateObjectWithScript<ShopScreen>();
+            screen.Shop = s;
+
+            return true;
+        }
+    }
+
+    [ProtoContract]
+    [NetworkPacketId(ClientIdentifiers.EnterInn)]
+    public struct EnterInn : IClientCommand
+    {
+        [ProtoMember(1)]
+        public int Tag;
+
+        public bool Process()
+        {
+            if (!MapLogic.Instance.IsLoaded)
+                return false;
+
+            MapStructure s = MapLogic.Instance.GetStructureByTag(Tag);
+            if (s == null || s.Class == null || !s.Class.Usable)
+            {
+                Debug.LogFormat("Attempted to enter nonexistent building {0}", Tag);
+                return false;
+            }
+
+            InnScreen screen = Utils.CreateObjectWithScript<InnScreen>();
+            screen.Inn = s;
+
+            return true;
+        }
+    }
+
+    [ProtoContract]
+    [NetworkPacketId(ClientIdentifiers.LeaveStructure)]
+    public struct LeaveStructure : IClientCommand
+    {
+        public bool Process()
+        {
+            if (!MapLogic.Instance.IsLoaded)
+                return false;
+
+            UiManager.Instance.ClearWindows();
 
             return true;
         }

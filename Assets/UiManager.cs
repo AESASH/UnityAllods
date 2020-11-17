@@ -5,6 +5,7 @@ using UnityEngine;
 public interface IUiEventProcessor
 {
     bool ProcessEvent(Event e);
+    bool ProcessCustomEvent(CustomEvent e);
 }
 
 public interface IUiEventProcessorBackground { }
@@ -32,6 +33,16 @@ public interface IUiItemAutoDropper
 }
 
 public delegate void UiDragCallback();
+
+public class CustomEvent
+{
+    // Global: cannot be blocked by lower/higher processors
+    public bool IsGlobal = false;
+    // Forced: always delivered to all processors, even disabled ones
+    public bool IsForced = false;
+
+    protected CustomEvent() { }
+}
 
 public class UiManager : MonoBehaviour
 {
@@ -80,10 +91,18 @@ public class UiManager : MonoBehaviour
         UpdateTopZ();
     }
 
+    public void SendCustomEvent(CustomEvent e)
+    {
+        lock (CustomEvents)
+        {
+            CustomEvents.Enqueue(e);
+        }
+    }
+
     public void ClearWindows()
     {
         foreach (MonoBehaviour wnd in Windows)
-            Destroy(wnd);
+            Destroy(wnd.gameObject);
         Windows.Clear();
     }
 
@@ -92,10 +111,34 @@ public class UiManager : MonoBehaviour
 
     }
 
+    private Queue<CustomEvent> CustomEvents = new Queue<CustomEvent>();
+
     private bool GotProcessors = false;
     private List<MonoBehaviour> Processors = new List<MonoBehaviour>();
     private List<bool> ProcessorsEnabled = new List<bool>();
 
+    private IUiEventProcessor lastMouseOver = null;
+    private void CheckMouseOver(IUiEventProcessor p)
+    {
+        if (p != lastMouseOver)
+        {
+            if (lastMouseOver != null)
+            {
+                Event ef = new Event();
+                ef.type = EventType.MouseMove;
+                ef.commandName = "mouseout";
+                lastMouseOver.ProcessEvent(ef);
+            }
+            lastMouseOver = p;
+            if (p != null)
+            {
+                Event ef = new Event();
+                ef.type = EventType.MouseMove;
+                ef.commandName = "mouseover";
+                p.ProcessEvent(ef);
+            }
+        }
+    }
 
     private float lastMouseX = 0;
     private float lastMouseY = 0;
@@ -111,6 +154,21 @@ public class UiManager : MonoBehaviour
 
         GotProcessors = false;
         EnumerateObjects();
+        // get all custom events.
+        lock (CustomEvents)
+        {
+            while (CustomEvents.Count > 0)
+            {
+                CustomEvent ce = CustomEvents.Dequeue();
+                for (int i = Processors.Count - 1; i >= 0; i--)
+                {
+                    // check if processor's renderer is enabled. implicitly don't give any events to invisible objects.
+                    if (!ce.IsForced && !ProcessorsEnabled[i]) continue;
+                    if (((IUiEventProcessor)Processors[i]).ProcessCustomEvent(ce) && !ce.IsGlobal)
+                        break;
+                }
+            }
+        }
         // get all events.
         Event e = new Event();
         while (Event.PopEvent(e))
@@ -188,6 +246,8 @@ public class UiManager : MonoBehaviour
                 UnsetTooltip();
             }
         }
+
+        CheckMouseOver((IUiEventProcessor)mProcessor);
 
         // process drag-drop for items.
         // first ask every element if they can process the drop.
@@ -273,7 +333,7 @@ public class UiManager : MonoBehaviour
     {
         if (Tooltip == null)
         {
-            TooltipRendererA = new AllodsTextRenderer(Fonts.Font2, Font.Align.Left, 0, 0, false);
+            TooltipRendererA = new AllodsTextRenderer(Fonts.Font2, Font.Align.Left, 0, 0, false, 12);
             Tooltip = Utils.CreateObject();
             Tooltip.transform.parent = transform;
             TooltipRenderer = Tooltip.AddComponent<MeshRenderer>();
@@ -305,10 +365,10 @@ public class UiManager : MonoBehaviour
         float fw = TooltipRendererA.ActualWidth + 12;
         float fh = TooltipRendererA.Height + 12;
 
-        if (topX + fw > Screen.width)
-            topX = Screen.width - fw;
-        if (topY + fh > Screen.height)
-            topY = Screen.height - fh;
+        if (topX + fw > MainCamera.Width)
+            topX = MainCamera.Width - fw;
+        if (topY + fh > MainCamera.Height)
+            topY = MainCamera.Height - fh;
         if (topX < 0)
             topX = 0;
         if (topY < 0)
@@ -319,12 +379,12 @@ public class UiManager : MonoBehaviour
         TooltipBuilder.Reset();
         TooltipBuilder.AddQuad(0, 0, 0, 4, 4);
         TooltipBuilder.AddQuad(0, TooltipRendererA.ActualWidth + 8, 0, 4, 4);
-        TooltipBuilder.AddQuad(0, TooltipRendererA.ActualWidth + 8, TooltipRendererA.Height + 8, 4, 4);
-        TooltipBuilder.AddQuad(0, 0, TooltipRendererA.Height + 8, 4, 4);
+        TooltipBuilder.AddQuad(0, TooltipRendererA.ActualWidth + 8, TooltipRendererA.Height + 6, 4, 4);
+        TooltipBuilder.AddQuad(0, 0, TooltipRendererA.Height + 6, 4, 4);
 
         // now render border quads
         float bw = TooltipRendererA.ActualWidth + 6;
-        float bh = TooltipRendererA.Height + 6;
+        float bh = TooltipRendererA.Height + 6 - 2; // 2 = difference between "LineHeight" and our custom LineHeight of 12
         // top border bright
         TooltipBuilder.CurrentMesh = 1;
         TooltipBuilder.CurrentColor = new Color32(165, 121, 49, 255);
@@ -393,7 +453,11 @@ public class UiManager : MonoBehaviour
 
     public void UnsetTooltip()
     {
-        if (Tooltip != null) Tooltip.SetActive(false);
+        if (Tooltip != null)
+        {
+            Tooltip.SetActive(false);
+            lastMouseChange = 0f;
+        }
     }
 
     // ITEM DRAGGING RELATED
@@ -401,15 +465,17 @@ public class UiManager : MonoBehaviour
     private IUiItemDragger _DragDragger = null;
     public Item DragItem { get; private set; }
     public int DragItemCount { get; private set; }
+    public long DragMoneyCount { get; private set; }
     private UiDragCallback _DragCallback = null;
 
-    public void StartDrag(Item item, int count, UiDragCallback onCancelDrag)
+    public void StartDrag(Item item, int count, long money, UiDragCallback onCancelDrag)
     {
         if (_CurrentDragDragger == null)
             return; // don't allow drag start if not in callback.
         _DragDragger = _CurrentDragDragger;
         DragItem = item;
         DragItemCount = count;
+        DragMoneyCount = money;
         _DragCallback = onCancelDrag;
     }
 

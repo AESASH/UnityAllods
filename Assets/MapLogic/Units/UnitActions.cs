@@ -45,7 +45,7 @@ public class IdleAction : IUnitAction
         if (Unit.Class.IdlePhases > 1)
         {
             Unit.IdleTime++;
-            if (Unit.IdleTime >= Unit.Class.IdleFrames[Unit.IdleFrame].Time)
+            if (Unit.IdleTime >= Unit.Class.IdleFrames[Unit.IdleFrame].Time*2)
             {
                 Unit.IdleFrame = ++Unit.IdleFrame % Unit.Class.IdlePhases;
                 Unit.IdleTime = 0;
@@ -144,6 +144,9 @@ public class MoveAction : IUnitAction
         if (!NetworkManager.IsClient && !Unit.Interaction.CheckWalkableForUnit(TargetX, TargetY, false))
             return false; // stop this state. possibly try to pathfind again. otherwise idle.
 
+        Unit.TargetX = TargetX;
+        Unit.TargetY = TargetY;
+
         //Debug.LogFormat("walk state: moving to {0},{1} ({2})", TargetX, TargetY, Frac);
         if (Frac >= 1)
         {
@@ -159,8 +162,9 @@ public class MoveAction : IUnitAction
             if (Frac == 0)
             {
                 Unit.LinkToWorld(TargetX, TargetY); // link to target coordinates. don't unlink from previous yet.
-                FracAdd = (float)Unit.Stats.Speed / 400; // otherwise can be written as speed / 20 / 20.
-                MoveSpeed = (float)Unit.Stats.Speed / 20; // move animation play speed.
+                float spd = 1 / Unit.Interaction.GetMoveTime(TargetX, TargetY, false); // do we need to do this every time?
+                FracAdd = spd / 400; // otherwise can be written as speed / 20 / 20.
+                MoveSpeed = spd / 20; // move animation play speed.
             }
 
             Frac = Mathf.Clamp01(Frac);

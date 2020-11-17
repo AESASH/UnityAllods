@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 using System.Collections;
 using System;
+using System.Collections.Generic;
 
 public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
 {
@@ -19,26 +20,6 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         UiManager.Instance.Unsubscribe(this);
     }
 
-    IEnumerator DoUpdateLight()
-    {
-        while (true)
-        {
-            //yield return new WaitUntil(() => (MapLogic.Instance.MapLightingNeedsUpdate));
-            yield return new WaitForEndOfFrame();
-            MapLogic.Instance.GetLightingTexture(); // update lighting texture
-        }
-    }
-
-    IEnumerator DoUpdateFOW()
-    {
-        while (true)
-        {
-            //yield return new WaitUntil(() => (MapLogic.Instance.MapFOWNeedsUpdate));
-            yield return new WaitForEndOfFrame();
-            MapLogic.Instance.GetFOWTexture(); // update fog of war texture
-        }
-    }
-
     private MapViewMiniMap MiniMap;
     private MapViewCommandbar Commandbar;
     private MapViewInfowindow Infowindow;
@@ -49,15 +30,41 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
 
     public Spell OneTimeCast; // this holds a spell casted from scroll
 
-    public MapObject SelectedObject { get; private set; }
-    public MapObject HoveredObject { get; private set; }
+    private MapObject _SelectedObject = null;
+    private MapObject _HoveredObject = null;
+
+    public MapObject SelectedObject
+    {
+        get { return _SelectedObject; }
+        set
+        {
+            if (_SelectedObject == value)
+                return;
+            _SelectedObject = value;
+            List<MapObject> selection = new List<MapObject>();
+            if (_SelectedObject != null)
+                selection.Add(_SelectedObject);
+            UiManager.Instance.SendCustomEvent(new MapViewSelectionChanged(selection));
+        }
+    }
+
+    public MapObject HoveredObject
+    {
+        get { return _HoveredObject; }
+        set
+        {
+            if (_HoveredObject == value)
+                return;
+            _HoveredObject = value;
+            UiManager.Instance.SendCustomEvent(new MapViewHoverChanged(_HoveredObject));
+        }
+    }
+
 
     // Use this for initialization
     void Start ()
     {
         UiManager.Instance.Subscribe(this);
-        StartCoroutine(DoUpdateLight());
-        StartCoroutine(DoUpdateFOW());
         //InitFromFile("scenario/20.alm");
         //InitFromFile("an_heaven_5_8.alm");
         //InitFromFile("kids3.alm");
@@ -85,8 +92,9 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         Chat.transform.parent = UiManager.Instance.transform;
     }
 
-    private Rect _VisibleRect = new Rect(0, 0, 0, 0);
-    public Rect VisibleRect
+    public RectInt UnpaddedVisibleRect { get; private set; }
+    private RectInt _VisibleRect = new RectInt(0, 0, 0, 0);
+    public RectInt VisibleRect
     {
         get
         {
@@ -98,13 +106,19 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     {
         // show UI parts
         Chat.Show();
+        //
+        UiManager.Instance.SendCustomEvent(new MapLoadedEvent());
     }
 
-    public void Unload()
+    public void OnMapUnloaded()
     {
+        UiManager.Instance.SendCustomEvent(new MapUnloadedEvent());
         Infowindow.Viewer = null;
         Commandbar.EnabledCommands = 0;
         UnloadMeshes();
+        // delete all child objects that we have
+        foreach (Transform child in transform)
+            Destroy(child.gameObject);
     }
 
     public void UnloadMeshes()
@@ -155,7 +169,11 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
                 DestroyImmediate(tex);
         }
 
-        MapLogic.Instance.InitFromFile(filename);
+        MapLogic.Instance.InitFromFile(filename, false);
+    }
+
+    public void OnMapLoaded()
+    {
         Debug.LogFormat("map = {0} ({1}x{2})", MapLogic.Instance.Title, MapLogic.Instance.Width - 16, MapLogic.Instance.Height - 16);
 
         InitMeshes();
@@ -165,7 +183,7 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         // run generic load
         Load();
 
-        this.transform.localScale = new Vector3(1, 1, 0.01f);
+        this.transform.localScale = new Vector3(1, 1, 0.005f);
     }
 
     GameObject[] MeshChunks = new GameObject[0];
@@ -469,38 +487,17 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     public int ScrollX { get { return _ScrollX; } }
     public int ScrollY { get { return _ScrollY; } }
 
-    public void OnObjectSelected(MapObject mobj)
-    {
-        if (mobj is IPlayerPawn)
-        {
-            Commandbar.InitDefault(SelectedObject);
-            if (mobj.GetObjectType() == MapObjectType.Human &&
-                ((MapHuman)mobj).IsHero)
-            {
-                Inventory.SetPack((MapHuman)mobj);
-                ///
-            }
-            else Inventory.SetPack(null);
-            if (mobj is MapUnit)
-                Spellbook.SetSpells((MapUnit)mobj);
-            else Spellbook.SetSpells(null);
-        }
-    }
-
     public void CenterOnObject(MapObject mobj)
     {
         CenterOnCell(mobj.X+mobj.Width/2, mobj.Y+mobj.Height/2);
         if (mobj is IPlayerPawn)
-        {
             SelectedObject = mobj;
-            OnObjectSelected(mobj);
-        }
     }
 
     public void CenterOnCell(int x, int y)
     {
-        int screenWB = (int)((float)Screen.width / 32 - 5); // 5 map cells are the right panels. these are always there.
-        int screenHB = (int)((float)Screen.height / 32);
+        int screenWB = (int)((float)MainCamera.Width / 32 - 5); // 5 map cells are the right panels. these are always there.
+        int screenHB = (int)((float)MainCamera.Height / 32);
         SetScroll(x - screenWB / 2, y - screenHB / 2);
     }
 
@@ -508,8 +505,8 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     {
         const int minX = 8;
         const int minY = 8;
-        int screenWB = (int)((float)Screen.width / 32 - 5); // 5 map cells are the right panels. these are always there.
-        int screenHB = (int)((float)Screen.height / 32);
+        int screenWB = (int)((float)MainCamera.Width / 32 - 5); // 5 map cells are the right panels. these are always there.
+        int screenHB = (int)((float)MainCamera.Height / 32);
         int maxX = MapLogic.Instance.Width - screenWB - 8;
         int maxY = MapLogic.Instance.Height - screenHB - 10;
 
@@ -523,7 +520,8 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
             _ScrollX = x;
             _ScrollY = y;
 
-            _VisibleRect = new Rect(_ScrollX, _ScrollY, screenWB, screenHB);
+            _VisibleRect = new RectInt(_ScrollX, _ScrollY, screenWB, screenHB);
+            UnpaddedVisibleRect = new RectInt(_VisibleRect.xMin, _VisibleRect.yMin, _VisibleRect.width, _VisibleRect.height);
             _VisibleRect.xMin -= 4;
             _VisibleRect.yMin -= 4;
             _VisibleRect.xMax += 4;
@@ -546,6 +544,29 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     }
 
     public bool GridEnabled = false;
+
+    private bool _SpritesBEnabled = true;
+    public bool SpritesBEnabled
+    {
+        get
+        {
+            return _SpritesBEnabled;
+        }
+
+        set
+        {
+            if (_SpritesBEnabled != value)
+            {
+                _SpritesBEnabled = value;
+                if (MapLogic.Instance.IsLoaded)
+                {
+                    List<MapObject> objects = MapLogic.Instance.GetAllObjects();
+                    for (int i = 0; i < objects.Count; i++)
+                        objects[i].DoUpdateView = true;
+                }
+            }
+        }
+    }
 
     int ScrollDeltaX = 0;
     int ScrollDeltaY = 0;
@@ -591,6 +612,9 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         if (!MapLogic.Instance.IsLoaded)
             return;
 
+        if (GridMeshMaterial == null || FOWMeshMaterial == null || MeshMaterial == null)
+            return;
+
         if (GridEnabled) GridMeshMaterial.color = new Color(1, 0, 0, 0.5f);
         else GridMeshMaterial.color = new Color(0, 0, 0, 0);
 
@@ -602,10 +626,8 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         if (fowTex != null)
             UpdateFOW(fowTex);
 
-        if (HoveredObject != null && (HoveredObject.GetObjectType() == MapObjectType.Monster ||
-                                      HoveredObject.GetObjectType() == MapObjectType.Human) && (!((MapUnit)HoveredObject).IsAlive || !MapLogic.Instance.Objects.Contains(HoveredObject))) HoveredObject = null;
-        if (SelectedObject != null && (SelectedObject.GetObjectType() == MapObjectType.Monster ||
-                                       SelectedObject.GetObjectType() == MapObjectType.Human) && (!((MapUnit)SelectedObject).IsAlive || !MapLogic.Instance.Objects.Contains(SelectedObject))) SelectedObject = null;
+        if (HoveredObject != null && HoveredObject is MapUnit hu && (!hu.IsAlive || !hu.IsLinked || hu.Flags.HasFlag(UnitFlags.PhasedOut))) HoveredObject = null;
+        if (SelectedObject != null && SelectedObject is MapUnit su && (!su.IsAlive || !su.IsLinked || su.Flags.HasFlag(UnitFlags.PhasedOut))) HoveredObject = null;
 
         UpdateLogic();
 
@@ -628,7 +650,11 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     public bool ProcessEvent(Event e)
     {
         if (!MapLogic.Instance.IsLoaded)
+        {
+            if (MapLogic.Instance.IsLoading)
+                MouseCursor.SetCursor(MouseCursor.CurWait);
             return false;
+        }
 
         if (e.type == EventType.KeyDown)
         {
@@ -741,29 +767,31 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         else if (e.rawType == EventType.MouseDown && e.button == 0)
         {
             // select unit if not selected yet
+            // to-do: unfuck this expression later...
             if (HoveredObject != null &&
-                (SelectedObject == null || (Commandbar.CurrentCommand == MapViewCommandbar.Commands.Move && GetCastSpell() == Spell.Spells.NoneSpell &&
-                                            !Input.GetKey(KeyCode.LeftAlt) && !Input.GetKey(KeyCode.RightAlt)) || (Commandbar.CurrentCommand == 0)))
+                     (SelectedObject == null || (Commandbar.CurrentCommand == MapViewCommandbar.Commands.Move && GetCastSpell() == Spell.Spells.NoneSpell &&
+                                            !Input.GetKey(KeyCode.LeftAlt) && !Input.GetKey(KeyCode.RightAlt)) || (Commandbar.CurrentCommand == 0)) &&
+                     (SelectedObject == null || !(HoveredObject is MapStructure s && s.Class.Usable)))
             {
                 SelectedObject = HoveredObject;
-                OnObjectSelected(SelectedObject);
             }
             else if (SelectedObject != null && SelectedObject is IPlayerPawn && ((IPlayerPawn)SelectedObject).GetPlayer() == MapLogic.Instance.ConsolePlayer)
             {
                 // todo: handle commands here
                 // try to walk.
-                if (SelectedObject.GetObjectType() == MapObjectType.Monster ||
-                    SelectedObject.GetObjectType() == MapObjectType.Human)
+                if (SelectedObject is MapUnit unit)
                 {
-                    MapUnit unit = (MapUnit)SelectedObject;
                     Spell.Spells castSpId = GetCastSpell();
-                    if (castSpId != Spell.Spells.NoneSpell && (MapLogic.Instance.Nodes[MouseCellX, MouseCellY].Flags & MapNodeFlags.Visible) != 0)
+                    if (HoveredObject is MapStructure struc && struc.Class.Usable)
+                    {
+                        Client.SendUseStructure(unit, struc);
+                    }
+                    else if (castSpId != Spell.Spells.NoneSpell && (MapLogic.Instance.Nodes[MouseCellX, MouseCellY].Flags & MapNodeFlags.Visible) != 0)
                     {
                         Spell castSp = GetOneTimeCast();
                         if (castSp == null)
                             castSp = unit.GetSpell(castSpId);
-                        if (HoveredObject != null && (HoveredObject.GetObjectType() == MapObjectType.Monster ||
-                                                      HoveredObject.GetObjectType() == MapObjectType.Human))
+                        if (HoveredObject != null && HoveredObject is MapUnit)
                             Client.SendCastToUnit(unit, castSp, (MapUnit)HoveredObject, MouseCellX, MouseCellY);
                         else Client.SendCastToArea(unit, castSp, MouseCellX, MouseCellY);
                         if (castSp == OneTimeCast || Commandbar.CurrentCommandActual == MapViewCommandbar.Commands.Cast)
@@ -780,8 +808,7 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
                     }
                     else if (Commandbar.CurrentCommand == MapViewCommandbar.Commands.Attack && 
                              HoveredObject != null && 
-                             (HoveredObject.GetObjectType() == MapObjectType.Monster ||
-                              HoveredObject.GetObjectType() == MapObjectType.Human))
+                             HoveredObject is MapUnit)
                     {
                         Client.SendAttackUnit(unit, (MapUnit)HoveredObject);
                     }
@@ -823,6 +850,11 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         return false;
     }
 
+    public bool ProcessCustomEvent(CustomEvent ce)
+    {
+        return false;
+    }
+
     public Spell GetOneTimeCast()
     {
         if (OneTimeCast == null || OneTimeCast.User == null ||
@@ -855,7 +887,7 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
 
         if (spl != null &&
             (spl.IsAreaSpell ||
-            (!spl.IsAreaSpell && HoveredObject != null && (HoveredObject.GetObjectType() == MapObjectType.Human || HoveredObject.GetObjectType() == MapObjectType.Monster))))
+            (!spl.IsAreaSpell && HoveredObject != null && HoveredObject is MapUnit)))
         {
             return splId;
         }
@@ -953,8 +985,8 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         if (!hoveringDarkness && HoveredObject != null && (Commandbar.CurrentCommand == MapViewCommandbar.Commands.Move || Commandbar.CurrentCommand == 0))
         {
             // hovered usable buildings have different cursor picture.
-            if (HoveredObject.GetObjectType() == MapObjectType.Structure &&
-                ((MapStructure)HoveredObject).Class.Usable) MouseCursor.SetCursor(MouseCursor.CurSelectStructure);
+            if (SelectedObject is MapUnit u && u.Player == MapLogic.Instance.ConsolePlayer &&
+                HoveredObject is MapStructure s && s.Class.Usable) MouseCursor.SetCursor(MouseCursor.CurSelectStructure);
             else MouseCursor.SetCursor(MouseCursor.CurSelect);
         }
         else if (SelectedObject != null && SelectedObject is IPlayerPawn)
@@ -985,15 +1017,26 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
     float lastLogicUpdateTime = 0;
     float lastLogTime = 0;
     float lastUpTime = 0;
+    void UpdateObjects()
+    {
+        for (int y = VisibleRect.yMin; y < VisibleRect.yMax; y++)
+        {
+            for (int x = VisibleRect.xMin; x < VisibleRect.xMax; x++)
+            {
+                MapNode node = MapLogic.Instance.Nodes[x, y];
+                for (int i = 0; i < node.Objects.Count; i++)
+                {
+                    MapObject mobj = node.Objects[i];
+                    mobj.CheckAllocateObject();
+                    if (mobj.GameScript != null && mobj.GameScript is IObjectManualUpdate)
+                        ((IObjectManualUpdate)mobj.GameScript).OnUpdate();
+                }
+            }
+        }
+    }
+
     void UpdateLogic()
     {
-        for (int i = 0; i < MapLogic.Instance.Objects.Count; i++)
-        {
-            MapObject mobj = MapLogic.Instance.Objects[i];
-            if (mobj.GameScript is IObjectManualUpdate)
-                ((IObjectManualUpdate)mobj.GameScript).OnUpdate();
-        }
-
         lastLogTime += Time.deltaTime;
         lastLogicUpdateTime += Time.deltaTime;
         if (lastLogicUpdateTime >= 1)
@@ -1012,8 +1055,10 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
                 lastLogicUpdateTime -= 1;
             }
         }
-    }
 
+        UpdateObjects();
+    }
+    
     void UpdateTiles(int waf)
     {
         for (int i = 0; i < MeshChunks.Length; i++)
@@ -1089,7 +1134,7 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
             SelectedObject != null &&
             SelectedObject is IPlayerPawn &&
             ((IPlayerPawn)SelectedObject).GetPlayer() == MapLogic.Instance.ConsolePlayer &&
-            SelectedObject.GetObjectType() == MapObjectType.Human &&
+            SelectedObject is MapHuman &&
             ((MapHuman)SelectedObject).IsHero;
     }
 
@@ -1099,8 +1144,9 @@ public class MapView : MonoBehaviour, IUiEventProcessor, IUiItemDragger
         //throw new NotImplementedException();
         // disregard x/y, as we got MouseCellX/MouseCellY.
         //Debug.LogFormat("dropping {0} of {1}", item.Count, item.ToString());
-        MapHuman human = (MapHuman)SelectedObject;
-        Client.DropItem(human, item, MouseCellX, MouseCellY);
+        MapHuman human = SelectedObject as MapHuman;
+        if (human != null)
+            Client.DropItem(human, item, MouseCellX, MouseCellY);
         return true;
     }
 

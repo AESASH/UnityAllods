@@ -102,7 +102,7 @@ public class MapViewProjectile : MapViewObject, IObjectManualUpdate
     {
         if (LogicProjectile.Class != null)
             name = string.Format("Projectile (ID={0}, ClassID={1})", LogicProjectile.ID, LogicProjectile.Class.ID);
-        else name = string.Format("Projectile (ID={0}, ClassID=<INVALID>)", LogicProjectile.ID);
+        else name = string.Format("Projectile (ID={0}, ClassID=<NULL>)", LogicProjectile.ID);
 
         // let's give ourselves a sprite renderer first.
         Renderer = gameObject.AddComponent<MeshRenderer>();
@@ -120,6 +120,8 @@ public class MapViewProjectile : MapViewObject, IObjectManualUpdate
         ShadowFilter.mesh = new Mesh();
         ShadowObject.transform.localScale = new Vector3(1, 1, 1);
         ShadowObject.transform.localPosition = new Vector3(0, 0, 16);
+
+        OnUpdate();
     }
 
     public bool HasShadow
@@ -137,6 +139,14 @@ public class MapViewProjectile : MapViewObject, IObjectManualUpdate
     {
         if (Renderer == null)
             return;
+
+        if (LogicProjectile.Class == null)
+        {
+            oldVisibility = false;
+            Renderer.enabled = false;
+            ShadowRenderer.enabled = false;
+            return;
+        }
 
         if (LogicProjectile.GetVisibility() < 2)
         {
@@ -250,18 +260,9 @@ public class MapViewProjectile : MapViewObject, IObjectManualUpdate
             }
 
             // always centered
-            if (LogicProjectile.Class.ID == 7) // bat sonic boom
-            {
-                transform.localPosition = new Vector3(xP.x - 16 * LogicProjectile.Scale,
-                                                      xP.y - 16 * LogicProjectile.Scale,
-                                                      MakeZFromY(xP.y) - LogicProjectile.ZOffset); // order sprites by y coordinate basically
-            }
-            else
-            {
-                transform.localPosition = new Vector3(xP.x - sprites.Sprites[actualFrame].rect.width * 0.5f * LogicProjectile.Scale,
-                                                      xP.y - sprites.Sprites[actualFrame].rect.height * 0.5f * LogicProjectile.Scale,
-                                                      MakeZFromY(xP.y) - LogicProjectile.ZOffset); // order sprites by y coordinate basically
-            }
+            transform.localPosition = new Vector3(xP.x - LogicProjectile.Class.Width * 0.5f * LogicProjectile.Scale,
+                                                    xP.y - LogicProjectile.Class.Height * 0.5f * LogicProjectile.Scale,
+                                                    MakeZFromY(xP.y) - LogicProjectile.ZOffset - LogicProjectile.ProjectileZ * 32); // order sprites by y coordinate basically
 
             transform.localScale = new Vector3(LogicProjectile.Scale, LogicProjectile.Scale, LogicProjectile.Scale);
             ShadowObject.transform.localScale = new Vector3(LogicProjectile.Scale, LogicProjectile.Scale, LogicProjectile.Scale);

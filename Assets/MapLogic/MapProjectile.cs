@@ -28,18 +28,14 @@ public class MapProjectileLogicHoming : IMapProjectileLogic
 
     public void SetProjectile(MapProjectile proj)
     {
-        if (Projectile != null && Target != null)
-            Target.TargetedBy.Remove(Projectile);
         Projectile = proj;
-        if (Target != null)
-            Target.TargetedBy.Add(proj);
     }
 
     public virtual bool Update()
     {
         // calculate target direction!
         // check if target is gone
-        if (!Target.IsAlive || !MapLogic.Instance.Objects.Contains(Target))
+        if (!Target.IsAlive || !Target.IsLinked)
             Target = null;
 
         if (Target != null)
@@ -97,9 +93,13 @@ public class MapProjectileLogicDirectional : IMapProjectileLogic
 
     public bool Update()
     {
+        if (Projectile.Class == null)
+            return false;
         // magic handling: blizzard projectile uses frame 8 for real projectile, and 0-7 for death anim
         if (Projectile.Class.ID == (int)AllodsProjectile.Blizzard)
             Projectile.CurrentFrame = 8;
+        else if (Projectile.Class.ID == 7) // bat_sonic attack
+            Projectile.LightLevel = 0;
         else Projectile.LightLevel = 256;
         Vector3 targetCenter = new Vector3(TargetX, TargetY, TargetZ);
         Projectile.Angle = MapObject.FaceVector(targetCenter.x - Projectile.ProjectileX, targetCenter.y - Projectile.ProjectileY);
@@ -163,6 +163,8 @@ public class MapProjectileLogicSimple : IMapProjectileLogic
     {
         if (AnimationSpeed == 0)
             return true;
+        if (Projectile.Class == null)
+            return false;
 
         Projectile.Scale = Scale;
 
@@ -219,11 +221,7 @@ public class MapProjectileLogicLightning : IMapProjectileLogic
 
     public void SetProjectile(MapProjectile proj)
     {
-        if (Projectile != null && Target != null)
-            Target.TargetedBy.Remove(Projectile);
         Projectile = proj;
-        if (Target != null)
-            Target.TargetedBy.Add(proj);
     }
 
     private float Sin10(float v)
@@ -233,9 +231,11 @@ public class MapProjectileLogicLightning : IMapProjectileLogic
 
     public virtual bool Update()
     {
+        if (Projectile.Class == null)
+            return false;
         // calculate target direction!
         // check if target is gone
-        if (Target != null && (!Target.IsAlive || !MapLogic.Instance.Objects.Contains(Target)))
+        if (Target != null && (!Target.IsAlive || !Target.IsLinked))
             Target = null;
 
         Projectile.Alpha = 0;
@@ -257,7 +257,7 @@ public class MapProjectileLogicLightning : IMapProjectileLogic
                 visProj.LightLevel = 0;
                 visProj.CurrentFrame = Color==0 ? 0 : (5 * (Color - 1));
                 visProj.SetPosition(Projectile.ProjectileX + TargetDir.x * i, Projectile.ProjectileY + TargetDir.y * i, 0); // for now
-                MapLogic.Instance.Objects.Add(visProj);
+                MapLogic.Instance.AddObject(visProj, true);
                 SubProjectiles.Add(visProj);
             }
 
@@ -349,6 +349,9 @@ public class MapProjectileLogicEOT : IMapProjectileLogic
         if (timeOffset >= Duration) // die
             return false;
 
+        if (Projectile.Class == null)
+            return true;
+
         float ll = 0;
 
         // first, check start and end
@@ -430,7 +433,11 @@ public enum AllodsProjectile
     Steam = 8,
     Teleport = 54,
     ChainLightning = 30,
-    DiamondDust = 40
+    DiamondDust = 40,
+
+    // special projectile types, not real
+    SpecLight = 0x100,
+    SpecDarkness = 0x101
 }
 
 public class MapProjectile : MapObject, IDynlight
@@ -438,6 +445,7 @@ public class MapProjectile : MapObject, IDynlight
     public override MapObjectType GetObjectType() { return MapObjectType.Effect; }
     protected override Type GetGameObjectType() { return typeof(MapViewProjectile); }
 
+    public AllodsProjectile ClassID;
     public ProjectileClass Class;
 
     public float FracX;
@@ -482,7 +490,7 @@ public class MapProjectile : MapObject, IDynlight
         DoUpdateView = true;
 
         if (bDoCalcLight)
-            MapLogic.Instance.CalculateDynLighting();
+            MapLogic.Instance.MarkDynLightingForUpdate();
     }
 
     private int _LightLevel;
@@ -498,7 +506,7 @@ public class MapProjectile : MapObject, IDynlight
             if (_LightLevel != value)
             {
                 _LightLevel = value;
-                MapLogic.Instance.CalculateDynLighting();
+                MapLogic.Instance.MarkDynLightingForUpdate();
             }
         }
     }
@@ -621,11 +629,17 @@ public class MapProjectile : MapObject, IDynlight
 
     private void InitProjectile(int id, IPlayerPawn source, IMapProjectileLogic logic, MapProjectileCallback cb)
     {
+        ClassID = (AllodsProjectile)id;
         Class = ProjectileClassLoader.GetProjectileClassById(id);
         if (Class == null)
         {
-            Debug.LogFormat("Invalid projectile created (id={0})", id);
-            return;
+            // make sure that at least ID is valid
+            if (!Enum.IsDefined(typeof(AllodsProjectile), id))
+            {
+                // otherwise spam log
+                Debug.LogFormat("Invalid projectile created (id={0})", id);
+                return;
+            }
         }
 
         Source = source;
@@ -645,14 +659,6 @@ public class MapProjectile : MapObject, IDynlight
     public override void Dispose()
     {
         LightLevel = 0;
-        for (int i = 0; i < MapLogic.Instance.Objects.Count; i++)
-        {
-            MapObject mobj = MapLogic.Instance.Objects[i];
-            if (mobj.GetObjectType() != MapObjectType.Monster &&
-                mobj.GetObjectType() != MapObjectType.Human) continue;
-            MapUnit unit = (MapUnit)mobj;
-            unit.TargetedBy.Remove(this);
-        }
         base.Dispose();
     }
 
@@ -662,6 +668,14 @@ public class MapProjectile : MapObject, IDynlight
             Callback(this);
         if (nullify)
             Callback = null;
+    }
+
+    public override void CheckAllocateObject()
+    {
+        if (Class == null)
+            return; // no point in allocating visual object for something logical-only
+        if (GetVisibility() == 2)
+            AllocateObject();
     }
 
     public override void Update()

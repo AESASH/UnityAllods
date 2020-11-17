@@ -155,31 +155,11 @@ public class MapHuman : MapUnit
         }
 
         CoreStats.HealthMax = -1;
-        UpdateItems();
+        OnUpdateItems();
 
         // fix health and mana
         Stats.TrySetHealth(Stats.HealthMax);
         Stats.TrySetMana(Stats.ManaMax);
-
-        // add item for testing
-        if (!NetworkManager.IsClient)
-        {
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Meteoric Amulet {skillfire=100,skillwater=100,skillair=100,skillearth=100,skillastral=100,manamax=16000}")); // for testing mage
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Ring {body=3,scanrange=1,spirit=1}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Amulet {body=3,scanrange=1,spirit=1}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Dragon Leather Large Shield {body=3,protectionearth=20,damagebonus=20}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Plate Helm {body=3,scanrange=2}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Plate Cuirass {body=3}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Plate Bracers {body=3}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Scale Gauntlets {body=3}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Plate Boots {body=3}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Crystal Pike {tohit=500,damagemin=10,damagemax=20}"));
-            ItemsPack.PutItem(ItemsPack.Count, new Item("Very Rare Meteoric Crossbow {damagemax=500}"));
-            for (int i = 0; i < 50; i++)
-                ItemsPack.PutItem(ItemsPack.Count, new Item("SuperScroll Teleport"));
-            for (int i = 0; i < 250; i++)
-                ItemsPack.PutItem(ItemsPack.Count, new Item("Scroll Teleport"));
-        }
     }
 
     public override bool IsItemUsable(Item item)
@@ -187,6 +167,8 @@ public class MapHuman : MapUnit
         if (item == null)
             return false;
         if (!item.IsValid)
+            return false;
+        if (item.IsMoney)
             return false;
         if ((item.Class.ItemID & 0xFF00) == 0x0E00) // special item
             return true;
@@ -208,7 +190,7 @@ public class MapHuman : MapUnit
         return Mathf.Log(v) / Mathf.Log(1.1f);
     }
 
-    public override void UpdateItems()
+    protected override void OnUpdateItems()
     {
         if (IsHero)
         {
@@ -274,7 +256,8 @@ public class MapHuman : MapUnit
         }
 
         // if not client, recalc stats
-        // actually, let client do this too, we send it the required info anyway
+        if (NetworkManager.IsClient)
+            return;
         // max brms
         short maxBody = 100, maxReaction = 100, maxMind = 100, maxSpirit = 100;
         if ((Gender & GenderFlags.MaleFighter) == GenderFlags.MaleFighter)
@@ -328,7 +311,7 @@ public class MapHuman : MapUnit
         CoreStats.ManaRegeneration = 100;
 
         // skills
-        if ((Gender & GenderFlags.Fighter) != 0)
+        if (Gender.HasFlag(GenderFlags.Fighter))
         {
             CoreStats.SkillBlade = (byte)GetSkill(ExperienceSkill.Blade);
             CoreStats.SkillAxe = (byte)GetSkill(ExperienceSkill.Axe);
@@ -336,7 +319,7 @@ public class MapHuman : MapUnit
             CoreStats.SkillPike = (byte)GetSkill(ExperienceSkill.Pike);
             CoreStats.SkillShooting = (byte)GetSkill(ExperienceSkill.Shooting);
         }
-        else if ((Gender & GenderFlags.Mage) != 0)
+        else if (Gender.HasFlag(GenderFlags.Mage))
         {
             CoreStats.SkillFire = (byte)GetSkill(ExperienceSkill.Fire);
             CoreStats.SkillWater = (byte)GetSkill(ExperienceSkill.Water);
@@ -456,6 +439,23 @@ public class MapHuman : MapUnit
         Stats.ProtectionEarth = (byte)Math.Min(maxProt, Math.Max(minProt, Stats.ProtectionEarth));
         Stats.ProtectionAstral = (byte)Math.Min(maxProt, Math.Max(minProt, Stats.ProtectionAstral));
 
+        if (Gender.HasFlag(GenderFlags.Fighter))
+        {
+            Stats.SkillBlade = (byte)(CoreStats.SkillBlade + ItemStats.SkillBlade);
+            Stats.SkillAxe = (byte)(CoreStats.SkillAxe + ItemStats.SkillAxe);
+            Stats.SkillBludgeon = (byte)(CoreStats.SkillBludgeon + ItemStats.SkillBludgeon);
+            Stats.SkillPike = (byte)(CoreStats.SkillPike + ItemStats.SkillPike);
+            Stats.SkillShooting = (byte)(CoreStats.SkillShooting + ItemStats.SkillShooting);
+        }
+        else if (Gender.HasFlag(GenderFlags.Mage))
+        {
+            CoreStats.SkillFire = (byte)(CoreStats.SkillFire + ItemStats.SkillFire);
+            CoreStats.SkillWater = (byte)(CoreStats.SkillWater + ItemStats.SkillWater);
+            CoreStats.SkillAir = (byte)(CoreStats.SkillAir + ItemStats.SkillAir);
+            CoreStats.SkillEarth = (byte)(CoreStats.SkillEarth + ItemStats.SkillEarth);
+            CoreStats.SkillAstral = (byte)(CoreStats.SkillAstral + ItemStats.SkillAstral);
+        }
+
         //Debug.LogFormat("ItemStats = {0}", ItemStats.ToString());
 
         CalculateVision();
@@ -524,7 +524,7 @@ public class MapHuman : MapUnit
         return 0;
     }
 
-    public int SetSkillExperience(ExperienceSkill sk, int value)
+    public int SetSkillExperience(ExperienceSkill sk, int value, bool message)
     {
         if ((Gender & GenderFlags.Mage | GenderFlags.Fighter) == 0)
             return 0;
@@ -536,9 +536,10 @@ public class MapHuman : MapUnit
             int oldskill = GetSkillFromExperience(oldexp);
             int newskill = GetSkillFromExperience(newexp);
             if (NetworkManager.IsServer)
-                Server.NotifyHumanLevelUp(this, sk, newexp);
+                Server.NotifyHumanLevelUp(this, sk, newexp, message);
             if (oldskill < newskill && 
-                Player == MapLogic.Instance.ConsolePlayer)
+                Player == MapLogic.Instance.ConsolePlayer &&
+                message)
             {
                 int skillIndex = (int)sk;
                 if ((Gender & GenderFlags.Mage) != 0)
@@ -559,7 +560,7 @@ public class MapHuman : MapUnit
     public void SetSkill(ExperienceSkill sk, int value)
     {
         int exp = value > 0 ? (int)((Mathf.Pow(1.1f, value) - 1f) * 1000f) : 0;
-        SetSkillExperience(sk, exp);
+        SetSkillExperience(sk, exp, false);
     }
 
     private static int[] ReverseExpTable;

@@ -400,7 +400,7 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
             return false;
         //item = LogicHuman.TakeItemFromBody((MapUnit.BodySlot)item.Class.Option.Slot);
         LogicHuman.DoUpdateInfo = true;
-        UiManager.Instance.StartDrag(item, 1, () =>
+        UiManager.Instance.StartDrag(item, 1, 0, () =>
         {
             // put item back to body if cancelled
             //LogicHuman.PutItemToBody((MapUnit.BodySlot)item.Class.Option.Slot, item);
@@ -445,7 +445,7 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
     private bool CheckScroll(Item item)
     {
         // check if this item is a scroll. scrolls have special handling on the client, everything else is in IsItemUsable/PutItemToBody
-        if ((item.Class.ItemID & 0xFFC0) == 0x0E00)
+        if (item.Class.IsScroll)
         {
             MapView.Instance.OneTimeCast = item.GetScrollEffect(LogicHuman);
             return true;

@@ -49,21 +49,21 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
 
         transform.localScale = new Vector3(1, 1, 1);
 
-        ConsoleHeight = Screen.height / 3;
+        ConsoleHeight = MainCamera.Height / 3;
 
         BgObject = Utils.CreatePrimitive(PrimitiveType.Quad);
         BgObject.name = "ConsoleBackground";
         BgObject.transform.parent = transform;
         BgRenderer = BgObject.GetComponent<MeshRenderer>();
-        BgObject.transform.localPosition = new Vector3(Screen.width / 2, ConsoleHeight / 2, 0f);
-        BgObject.transform.localScale = new Vector3(Screen.width, ConsoleHeight);
+        BgObject.transform.localPosition = new Vector3(MainCamera.Width / 2, ConsoleHeight / 2, 0f);
+        BgObject.transform.localScale = new Vector3(MainCamera.Width, ConsoleHeight);
         BgRenderer.material = new Material(MainCamera.MainShader);
         BgRenderer.material.color = new Color(0, 0, 0, 0.6f);
         BgRenderer.enabled = false;
         transform.position = new Vector3(0, 0, MainCamera.MouseZ + 0.01f);
 
         // prepare text. this renderer will wrap lines based on screen width.
-        TextRendererA = new AllodsTextRenderer(Fonts.Font2, Font.Align.Left, Screen.width - 4, 0, true);
+        TextRendererA = new AllodsTextRenderer(Fonts.Font2, Font.Align.Left, MainCamera.Width - 4, 0, true);
         TextObject = TextRendererA.GetNewGameObject(0.01f, transform, 100);
         TextObject.transform.localPosition = new Vector3(2, 2, -0.001f);
         TextRenderer = TextObject.GetComponent<MeshRenderer>();
@@ -75,7 +75,7 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
         EditField.transform.localScale = new Vector3(1, 1, 0.001f);
         EditField.Font = Fonts.Font2;
         EditField.Prefix = "> ";
-        EditField.Width = Screen.width - 4;
+        EditField.Width = MainCamera.Width - 4;
         EditField.Height = Fonts.Font2.LineHeight;
         EditField.IsFocused = true;
         EditField.OnReturn = () =>
@@ -143,6 +143,11 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
         }
 
         return true;
+    }
+
+    public bool ProcessCustomEvent(CustomEvent ce)
+    {
+        return false;
     }
 
     public void Update()
@@ -254,10 +259,20 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
             {
                 try
                 {
-                    List<string> methodArgs = new List<string>();
-                    if (parameters.Length > 0) { 
+                    List<object> methodArgs = new List<object>();
+                    if (parameters.Length > 0)
+                    {
                         for (int j = 0; j < parameters.Length; j++)
                         {
+                            if (j == parameters.Length-1 && parameters[j].ParameterType == typeof(string[]))
+                            {
+                                List<string> varArgs = new List<string>();
+                                for (int k = j; k < consoleArgs.Length; k++)
+                                    varArgs.Add(consoleArgs[k]);
+                                methodArgs.Add(varArgs.ToArray());
+                                break;
+                            }
+
                             string value = parameters[j].DefaultValue.ToString();
                             if (consoleArgs.ElementAtOrDefault(j) != null)
                             {
@@ -279,9 +294,9 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
                     else WriteLine("{0}: too many arguments.", args[0]);
                     cmdFound = true;
                 }
-                catch (ArgumentException) // not a command, commands accept strings
+                catch (ArgumentException e) // not a command, commands accept strings
                 {
-
+                    Debug.LogError(e);
                 }
                 break;
             }

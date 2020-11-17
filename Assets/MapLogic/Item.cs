@@ -193,7 +193,7 @@ public class ItemEffect
                 Spell sp = new Spell(spid, unit);
                 sp.Skill = Value2;
                 sp.Item = item;
-                value = "\"" + Locale.Spell[spid - 1] + "\"\n" + sp.ToVisualString();
+                value = Locale.Spell[spid - 1] + "\n" + sp.ToVisualString();
             }
             return string.Format("{0} {1}", effect, value);
         }
@@ -205,7 +205,7 @@ public class ItemEffect
             if (spid < 1 || spid-1 >= Locale.Spell.Count)
                 value = "unknown_" + spid.ToString();
             else value = Locale.Spell[spid-1];
-            return string.Format("{0} \"{1}\"", effect, value);
+            return string.Format("{0} {1}", effect, value);
         }
         else if (vistype < Locale.Stats.Count)
         {
@@ -308,6 +308,8 @@ public class Item
     public int Index = 0;
 
     public bool IsValid { get { return (Class != null); } }
+
+    public bool IsMoney { get { return (Class != null && Class.IsMoney); } }
 
     public ItemClass Class = null;
     public long Price = 2;
@@ -437,7 +439,7 @@ public class Item
                 NativeEffects.AddRange(ItemEffect.ParseEffectList(magicItem.Effects));
             }
         }
-        else
+        else if (!Class.IsMoney)
         {
             bool hasDamageMinMax = false;
             bool hasToHit = false;
@@ -514,6 +516,9 @@ public class Item
     // calculate price. calculate effects based on native effects + magic effects.
     public void UpdateItem()
     {
+        if (Class == null || Class.IsMoney)
+            return;
+
         // concat native and magic effects
         Effects.Clear();
         Effects.AddRange(NativeEffects);
@@ -530,7 +535,7 @@ public class Item
         }
         */
 
-        int manaUsage = 0;
+            int manaUsage = 0;
         for (int i = 0; i < Effects.Count; i++)
         {
             Templates.TplModifier modifier = TemplateLoader.GetModifierById((int)Effects[i].Type1);
@@ -557,6 +562,9 @@ public class Item
         if (Class == null)
             return "<INVALID>";
 
+        if (Class.IsMoney)
+            return string.Format("{0} Gold", Price);
+
         StringBuilder sb = new StringBuilder();
         sb.Append(Class.ServerName);
         List<ItemEffect> effts = (ownEffects ? Effects : MagicEffects);
@@ -582,11 +590,13 @@ public class Item
 
     public string ToVisualString()
     {
+        if (Class == null)
+            return "<INVALID>";
+
+        if (Class.IsMoney)
+            return Locale.Main[74];
+
         List<string> effects_str = new List<string>();
-        string countstr = "";
-        if (Count > 1)
-            countstr = string.Format(" ({0} {1})", Count, Locale.Main[87]);
-        effects_str.Add(Class.VisualName+countstr);
 
         List<ItemEffect> castEffects = new List<ItemEffect>();
         for (int i = 0; i < Effects.Count; i++)
@@ -595,12 +605,32 @@ public class Item
                 Effects[i].Type1 == ItemEffect.Effects.TeachSpell) castEffects.Add(Effects[i]);
         }
 
-        // list cast effects
-        for (int i = 0; i < castEffects.Count; i++)
+        //
+        int castIndex = 0;
+        if (Class.IsScroll || Class.IsBook)
+        {
+            string caststr = "";
+            if (castEffects.Count > 0)
+                caststr = " " + castEffects[0].ToVisualString(Parent != null ? Parent.Parent : null, this);
+            effects_str.AddRange((Class.VisualName + caststr).Split('\n'));
+            if (Count > 1)
+                effects_str[0] += string.Format(" ({0} {1})", Count, Locale.Main[87]);
+            castIndex = 1;
+        }
+        else
+        {
+            string countstr = "";
+            if (Count > 1)
+                countstr += string.Format(" ({0} {1})", Count, Locale.Main[87]);
+            effects_str.Add(Class.VisualName + countstr);
+        }
+
+        // list additional cast effects
+        for (int i = castIndex; i < castEffects.Count; i++)
         {
             effects_str.Add(castEffects[i].ToVisualString(Parent!=null?Parent.Parent:null, this));
         }
-
+        
         ItemEffect cachedNative = null;
 
         // list native effects

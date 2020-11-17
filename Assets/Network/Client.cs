@@ -78,6 +78,43 @@ public class Client
         }
     }
 
+    public static void SendUseStructure(MapUnit unit, MapStructure s)
+    {
+        if (NetworkManager.IsClient)
+        {
+            ServerCommands.UseStructure useStructureCmd;
+            useStructureCmd.UnitTag = unit.Tag;
+            useStructureCmd.StructureTag = s.Tag;
+            ClientManager.SendCommand(useStructureCmd);
+        }
+        else
+        {
+            if (MapLogic.Instance.ConsolePlayer == unit.Player)
+            {
+                unit.SetState(new UseStructureState(unit, s));
+            }
+        }
+    }
+
+    public static void SendLeaveStructure()
+    {
+        if (NetworkManager.IsClient)
+        {
+            ServerCommands.LeaveStructure leaveStructureCmd;
+            ClientManager.SendCommand(leaveStructureCmd);
+        }
+        else
+        {
+            Player player = MapLogic.Instance.ConsolePlayer;
+            // find all units of the player and leave all structures
+            foreach (MapObject mobj in player.Objects)
+                if (mobj is MapUnit unit && unit.CurrentStructure != null)
+                    unit.CurrentStructure.HandleUnitLeave(unit);
+
+            Server.NotifyLeaveStructure(player);
+        }
+    }
+
     public static void SendAttackUnit(MapUnit unit, MapUnit targetUnit)
     {
         if (NetworkManager.IsClient)
@@ -245,8 +282,16 @@ public class Client
                 y = human.Y;
             }
 
+            // check if we are dropping gold
             ItemPack pack = new ItemPack();
-            pack.PutItem(0, new Item(item, item.Count));
+            if (item.IsMoney)
+            {
+                pack.Money = item.Price;
+            }
+            else
+            {
+                pack.PutItem(0, new Item(item, item.Count));
+            }
             MapLogic.Instance.PutSackAt(x, y, pack, false);
         }
     }

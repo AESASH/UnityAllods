@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using UnityEngine;
+﻿using System.Collections.Generic;
 
 namespace SpellEffects
 {
@@ -56,6 +52,7 @@ namespace SpellEffects
         public override void ProcessStats(UnitStats stats)
         {
             stats.Speed += (byte)Power;
+            stats.RotationSpeed += (byte)Power;
         }
     }
 }
