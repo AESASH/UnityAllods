@@ -6,7 +6,7 @@ using UnityEngine;
 
 public class MapViewInventory : MonoBehaviour, IUiEventProcessor
 {
-    private ItemView View;
+    public ItemView View { get; private set; }
     private MeshRenderer Renderer;
     private MeshFilter Filter;
 
@@ -19,7 +19,45 @@ public class MapViewInventory : MonoBehaviour, IUiEventProcessor
     private static Texture2D InvArrow3 = null;
     private static Texture2D InvArrow4 = null;
 
-    private int ItemCount;
+    public int ItemCount = 0;
+
+    private void SendItemMoveCommand(Item item, int index)
+    {
+        // check if this pack is unit's pack.
+        if (View.Pack.Parent == null ||
+            View.Pack != View.Pack.Parent.ItemsPack) return;
+
+        // send command.
+        // first off, determine move source.
+        ServerCommands.ItemMoveLocation from;
+        int fromIndex = -1;
+        ServerCommands.ItemMoveLocation to;
+        int toIndex = -1;
+
+        MapUnit unit = View.Pack.Parent;
+
+        if (item.Parent == unit.ItemsBody)
+        {
+            from = ServerCommands.ItemMoveLocation.UnitBody;
+            fromIndex = item.Class.Option.Slot;
+        }
+        else if (item.Parent == unit.ItemsPack)
+        {
+            from = ServerCommands.ItemMoveLocation.UnitPack;
+            fromIndex = item.Index;
+        }
+        else if (item.Parent.LocationHint != ServerCommands.ItemMoveLocation.Undefined)
+        {
+            from = item.Parent.LocationHint;
+            fromIndex = item.Index;
+        }
+        else from = ServerCommands.ItemMoveLocation.Ground;
+
+        to = ServerCommands.ItemMoveLocation.UnitPack;
+        toIndex = index;
+
+        Client.SendItemMove(from, to, fromIndex, toIndex, item.Count, unit, MapView.Instance.MouseCellX, MapView.Instance.MouseCellY);
+    }
 
     public void Awake()
     {
@@ -27,12 +65,19 @@ public class MapViewInventory : MonoBehaviour, IUiEventProcessor
         View = Utils.CreateObjectWithScript<ItemView>();
         View.transform.parent = transform;
         View.transform.localScale = new Vector3(1, 1, 1);
-        View.transform.localPosition = new Vector3(32, 6, -1);
+        View.transform.localPosition = new Vector3(32, 6, -2);
+
+        View.OnProcessDrop = (Item item, int index) =>
+        {
+            SendItemMoveCommand(item, index);
+            View.Pack.PutItem(index, item);
+            return true;
+        };
     }
 
     public void Start()
     {
-        ItemCount = (MainCamera.Width - 176 - 64) / 80; // each arrow is 32 in width
+        if (ItemCount == 0) ItemCount = (MainCamera.Width - 176 - 64) / 80; // each arrow is 32 in width
         View.InvScale = 1;
         View.InvWidth = (int)(ItemCount / View.InvScale);
         View.InvHeight = (int)(1 / View.InvScale);
@@ -55,7 +100,7 @@ public class MapViewInventory : MonoBehaviour, IUiEventProcessor
         // generate mesh.
         Utils.MeshBuilder mb = new Utils.MeshBuilder();
         // 3 submeshes: left arrow, right arrow, and background. I'm NOT using the full original inventory view.
-        for (int j = 1; j >= 0; j--)
+        for (int j = 0; j >= 0; j--)
         {
             for (int i = 0; i < View.InvWidth; i++)
             {
@@ -79,9 +124,6 @@ public class MapViewInventory : MonoBehaviour, IUiEventProcessor
         mb.AddQuad(2, 32 + View.InvWidth * 80 * View.InvScale, 2, 32, 88);
 
         Filter.mesh = mb.ToMesh(MeshTopology.Quads, MeshTopology.Quads, MeshTopology.Quads);
-
-        transform.localScale = new Vector3(1, 1, 0.01f);
-        transform.localPosition = new Vector3((MainCamera.Width - 176) / 2 - (View.InvWidth * 80 * View.InvScale + 64) / 2, MainCamera.Height - 90, MainCamera.InterfaceZ + 0.99f); // on this layer all map UI is drawn
     }
 
     public void OnDestroy()

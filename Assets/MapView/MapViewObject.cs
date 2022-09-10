@@ -13,6 +13,7 @@ public interface IMapViewSelfie
     bool ProcessDrop(Item item, float mousex, float mousey);
     void ProcessEndDrag();
     void ProcessFailDrag();
+    void ProcessRollbackDrag(Item item);
     Item ProcessVerifyEndDrag();
     void DisplayPic(bool on, Transform parent);
     void DisplayInfo(bool on, Transform parent); // object displays it's info text at coordinates

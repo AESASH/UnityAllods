@@ -20,10 +20,15 @@ public interface IUiItemDragger
     bool ProcessDrop(Item item, float x, float y);
     // this is called when dropping succeeded on target
     void ProcessEndDrag();
-    // this is called when dropping failed on target (or cancelled)
-    void ProcessFailDrag();
     // this is called to make sure that source pack still has this item.
     Item ProcessVerifyEndDrag();
+    // called when dragging was cancelled, but before it was completed (otherwise rollback is called)
+    void ProcessFailDrag();
+    // this is called when dropping failed on target (or cancelled, or locked), but after ProcessVerifyEndDrag already happened.
+    // i.e. dragging already took the item from this pack, but the other pack did not accept it.
+    // in most implementations this returns the item back to it's original index
+    void ProcessRollbackDrag(Item item);
+
 }
 
 public interface IUiItemAutoDropper
@@ -101,8 +106,10 @@ public class UiManager : MonoBehaviour
 
     public void ClearWindows()
     {
-        foreach (MonoBehaviour wnd in Windows)
-            Destroy(wnd.gameObject);
+        var windows = new List<MonoBehaviour>();
+        windows.AddRange(Windows);
+        foreach (MonoBehaviour wnd in windows)
+            DestroyImmediate(wnd.gameObject);
         Windows.Clear();
     }
 
@@ -288,11 +295,15 @@ public class UiManager : MonoBehaviour
 
                     if (_CurrentDragDragger.ProcessDrop(newItem, mPos.x, mPos.y))
                     {
-                        _DragDragger.ProcessEndDrag();
                         DragItem = null;
                         DragItemCount = 0;
                         _DragCallback = null;
                         _DragDragger = null;
+                    }
+                    else
+                    {
+                        _DragDragger.ProcessRollbackDrag(newItem);
+                        CancelDrag();
                     }
                 }
             }
@@ -500,6 +511,7 @@ public class UiManager : MonoBehaviour
 
     public void Unsubscribe(IUiEventProcessor mb)
     {
+        if (lastMouseOver == mb) lastMouseOver = null;
         Processors.Remove((MonoBehaviour)mb);
     }
 

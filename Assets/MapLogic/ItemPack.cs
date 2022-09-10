@@ -9,6 +9,7 @@ public class ItemPack : IEnumerable<Item>
     private List<Item> ItemList = new List<Item>();
     public bool Passive { get; private set; }
     public MapUnit Parent { get; private set; }
+    public ServerCommands.ItemMoveLocation LocationHint = ServerCommands.ItemMoveLocation.Undefined;
 
     public ItemPack()
     {
@@ -39,6 +40,23 @@ public class ItemPack : IEnumerable<Item>
         }
     }
 
+    private bool _AutoCompact = true;
+    public bool AutoCompact
+    {
+        get
+        {
+            return _AutoCompact;
+        }
+        set
+        {
+            if (_AutoCompact != value)
+            {
+                _AutoCompact = value;
+                if (_AutoCompact) Compact();
+            }
+        }
+    }
+
     public long Money = 0;
 
     public long Price
@@ -56,7 +74,7 @@ public class ItemPack : IEnumerable<Item>
     private void UpdateParent()
     {
         if (Parent != null)
-            Parent.DoUpdateInfo = true;
+            Parent.RenderInfoVersion++;
     }
 
     public void Clear()
@@ -84,7 +102,7 @@ public class ItemPack : IEnumerable<Item>
     public Item FindItemBySlot(MapUnit.BodySlot slot)
     {
         for (int i = 0; i < ItemList.Count; i++)
-            if (ItemList[i].Class != null && ItemList[i].Class.Option.Slot == (int)slot)
+            if (ItemList[i] != null && ItemList[i].Class != null && ItemList[i].Class.Option.Slot == (int)slot)
                 return ItemList[i];
         return null;
     }
@@ -92,7 +110,7 @@ public class ItemPack : IEnumerable<Item>
     public Item TakeItem(Item item, int count)
     {
         for (int i = 0; i < ItemList.Count; i++)
-            if (ItemList[i].ExtendedEquals(item)) return TakeItem(i, count);
+            if (ItemList[i] != null && ItemList[i].ExtendedEquals(item)) return TakeItem(i, count);
         return null;
     }
 
@@ -103,9 +121,14 @@ public class ItemPack : IEnumerable<Item>
             return null;
 
         Item sourceItem = ItemList[position];
+        if (sourceItem == null)
+            return null;
+
         if (count >= sourceItem.Count)
         {
-            ItemList.RemoveAt(position);
+            if (_AutoCompact)
+                ItemList.RemoveAt(position);
+            else ItemList[position] = null;
             UpdateParent();
             return sourceItem;
         }
@@ -119,8 +142,22 @@ public class ItemPack : IEnumerable<Item>
     // insert item into pack.
     public Item PutItem(int position, Item item)
     {
+        if (item == null)
+        {
+            if (!_AutoCompact)
+            {
+                position = Math.Min(ItemList.Count, Math.Max(0, position));
+                ItemList.Insert(position, null);
+            }
+            return null;
+        }
+
         if (!Passive)
+        {
             item.Parent = this;
+            if (!NetworkManager.IsClient)
+                item.NetParent = LocationHint;
+        }
 
         if (item.Count <= 0)
             return null; // don't put anything if item count is zero. this can happen if item was removed from pack after drag started.
@@ -128,7 +165,7 @@ public class ItemPack : IEnumerable<Item>
         // check for already present count
         for (int i = 0; i < ItemList.Count; i++)
         {
-            if (ItemList[i].ExtendedEquals(item))
+            if (ItemList[i] != null && ItemList[i].ExtendedEquals(item))
             {
                 ItemList[i].Count += item.Count;
                 if (!Passive)
@@ -139,14 +176,17 @@ public class ItemPack : IEnumerable<Item>
         }
 
         position = Math.Min(ItemList.Count, Math.Max(0, position));
-        Item newItem = new Item(item, item.Count);
-        ItemList.Insert(position, newItem);
+
+        if (position < ItemList.Count && ItemList[position] == null)
+            ItemList.RemoveAt(position);
+
+        ItemList.Insert(position, item);
 
         if (!Passive)
-            newItem.Index = position;
+            item.Index = position;
 
         UpdateParent();
-        return newItem;
+        return item;
     }
 
     public IEnumerator<Item> GetEnumerator()
@@ -166,6 +206,31 @@ public class ItemPack : IEnumerable<Item>
             if (index < 0 || index >= ItemList.Count)
                 return null;
             return ItemList[index];
+        }
+    }
+
+    public override string ToString()
+    {
+        string output = "";
+        for (int i = 0; i < ItemList.Count; i++)
+        {
+            if (i > 0)
+                output += "; ";
+            if (ItemList[i] != null)
+                output += string.Format("[{0}] {1}", ItemList[i].Count, ItemList[i].ToStringWithEffects(false));
+            else output += "<null>";
+        }
+        return "ItemPack[" + output + "]";
+    }
+
+    // deletes null items (empty spaces). this is for shops
+    public void Compact()
+    {
+        ItemList.RemoveAll(x => x == null);
+        if (!Passive)
+        {
+            for (int i = 0; i < ItemList.Count; i++)
+                ItemList[i].Index = i;
         }
     }
 }

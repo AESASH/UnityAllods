@@ -276,14 +276,21 @@ public class NetItem
     public List<uint> ParentUIDs = new List<uint>();
     [ProtoMember(5)]
     public int Count;
+    [ProtoMember(6)]
+    public ServerCommands.ItemMoveLocation Parent;
 
     public NetItem()
     {
-
+        ClassID = 0;
     }
 
     public NetItem(Item item)
     {
+        if (item == null)
+        {
+            ClassID = 0;
+            return;
+        }
         ClassID = item.Class.ItemID;
         for (int i = 0; i < item.MagicEffects.Count; i++)
             MagicEffects.Add(item.MagicEffects[i]);
@@ -291,6 +298,7 @@ public class NetItem
         for (int i = 0; i < item.ParentUIDs.Count; i++)
             ParentUIDs.Add(item.ParentUIDs[i]);
         Count = item.Count;
+        Parent = item.NetParent;
     }
 }
 
@@ -305,6 +313,7 @@ public class Item
     public readonly List<uint> ParentUIDs = new List<uint>();
 
     public ItemPack Parent = null;
+    public ServerCommands.ItemMoveLocation NetParent = ServerCommands.ItemMoveLocation.Undefined;
     public int Index = 0;
 
     public bool IsValid { get { return (Class != null); } }
@@ -317,6 +326,8 @@ public class Item
     public List<ItemEffect> Effects = new List<ItemEffect>();
     public List<ItemEffect> NativeEffects = new List<ItemEffect>();
     public List<ItemEffect> MagicEffects = new List<ItemEffect>();
+
+    public int ManaUsage { get; private set; }
 
     public Item(NetItem netitem)
     {
@@ -331,6 +342,7 @@ public class Item
         }
 
         Count = netitem.Count;
+        NetParent = netitem.Parent;
 
         InitItem();
 
@@ -360,6 +372,7 @@ public class Item
         Count = Math.Min(original.Count, count);
   
         Parent = original.Parent;
+        NetParent = original.NetParent;
         Index = original.Index;
 
         InitItem();
@@ -535,16 +548,39 @@ public class Item
         }
         */
 
-            int manaUsage = 0;
-        for (int i = 0; i < Effects.Count; i++)
+        ManaUsage = 0;
+        for (int i = 0; i < MagicEffects.Count; i++)
         {
             Templates.TplModifier modifier = TemplateLoader.GetModifierById((int)Effects[i].Type1);
             if (modifier == null)
                 continue; // wtf was that lol.
-            manaUsage += modifier.ManaCost;
+
+            switch (Effects[i].Type1)
+            {
+                case ItemEffect.Effects.CastSpell:
+                    // get factor for spell price. use bookcost for this
+                    Templates.TplSpell spell = TemplateLoader.GetSpellById(Effects[i].Value1);
+                    int spellCost = 1;
+                    if (spell != null)
+                        spellCost = Math.Max(1, spell.ManaCost / 4);
+                    ManaUsage += (int)(modifier.ManaCost * Effects[i].Value2 * spellCost);
+                    break;
+
+                case ItemEffect.Effects.DamageFire:
+                case ItemEffect.Effects.DamageWater:
+                case ItemEffect.Effects.DamageAir:
+                case ItemEffect.Effects.DamageEarth:
+                case ItemEffect.Effects.DamageAstral:
+                    ManaUsage += modifier.ManaCost * (Effects[i].Value1 + Effects[i].Value2);
+                    break;
+
+                default:
+                    ManaUsage += modifier.ManaCost * Effects[i].Value1;
+                    break;
+            }
         }
 
-        Price = Math.Max(Price, (int)(Price * ((float)manaUsage / 10)));
+        Price += ManaUsage * 10000;
 
         // search for override price effect
         for (int i = 0; i < Effects.Count; i++)

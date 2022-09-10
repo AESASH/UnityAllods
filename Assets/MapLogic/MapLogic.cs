@@ -156,7 +156,7 @@ class MapLogic
             {
                 foreach (MapObject mobj in Nodes[x, y].Objects)
                 {
-                    mobj.DoUpdateView = true;
+                    mobj.RenderViewVersion++;
                     if (mobj is IDynlight)
                     {
                         int lval = ((IDynlight)mobj).GetLightValue();
@@ -861,6 +861,8 @@ class MapLogic
                 */
             }
 
+            IsLoading = false;
+
             GameManager.Instance.CallDelegateOnNextFrame(() =>
             {
                 MapView.Instance.OnMapLoaded();
@@ -869,13 +871,11 @@ class MapLogic
         }
         catch (Exception e)
         {
+            IsLoading = false;
+
             Debug.LogError(e);
             GameConsole.Instance.WriteLine("Failed to load {0}: {1}: {2}", filename, e.GetType().Name, e.Message);
             MapStructure = null;
-        }
-        finally
-        {
-            IsLoading = false;
         }
     }
 
@@ -1141,13 +1141,32 @@ class MapLogic
             return null;
         unit.Player = player;
         unit.Tag = GetFreeUnitTag(); // this is also used as network ID.
-        unit.SetPosition(16, 16, false);
+
+        // find any instance of drop location
+        int dropX = 16;
+        int dropY = 16;
+        List<Vector2i> dropLocations = new List<Vector2i>();
+        foreach (AllodsMap.AlmLogic.AlmLogicItem item in MapStructure.Logic.LogicItems)
+        {
+            if (item.TypeID == 65538)
+                dropLocations.Add(new Vector2i((int)item.Values[0].Value, (int)item.Values[1].Value));
+        }
+
+        if (dropLocations.Count > 0)
+        {
+            int randomLocation = UnityEngine.Random.Range(0, dropLocations.Count - 1);
+            dropX = dropLocations[randomLocation].x;
+            dropY = dropLocations[randomLocation].y;
+        }
+
+        unit.SetPosition(dropX, dropY, false);
         unit.LinkToWorld();
         AddObject(unit, true);
 
         // add items for testing
         unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Meteoric Amulet {skillfire=100,skillwater=100,skillair=100,skillearth=100,skillastral=100,manamax=16000}")); // for testing mage
         unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Crystal Ring {body=3,scanrange=1,spirit=1}"));
+        unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Crystal Ring {body=3}"));
         unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Crystal Amulet {body=3,scanrange=1,spirit=1}"));
         unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Dragon Leather Large Shield {body=3,protectionearth=20,damagebonus=20}"));
         unit.ItemsPack.PutItem(unit.ItemsPack.Count, new Item("Very Rare Crystal Plate Helm {body=3,scanrange=2}"));
@@ -1284,7 +1303,7 @@ class MapLogic
             for (int i = 0; i < pack.Count; i++)
                 existingsack.Pack.PutItem(existingsack.Pack.Count, new Item(pack[i], pack[i].Count));
             existingsack.Pack.Money += pack.Money;
-            existingsack.DoUpdateView = true;
+            existingsack.RenderViewVersion++;
 
             if (NetworkManager.IsServer)
                 Server.NotifySack(x, y, existingsack.Pack.Price);

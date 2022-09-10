@@ -14,6 +14,7 @@ public enum ClientIdentifiers
     // map
     AddPlayer,
     DelPlayer,
+    PlayerMoney,
     ChatMessage,
     SpeedChanged,
 
@@ -53,6 +54,7 @@ public enum ClientIdentifiers
     EnterShop,
     EnterInn,
     LeaveStructure,
-    UpdateShop,
+    UpdateShopShelf,
+    UpdateShopTable,
     UpdateInn
 }

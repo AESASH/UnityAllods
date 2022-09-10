@@ -379,7 +379,8 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
             {
                 SendItemMoveCommand(item, ServerCommands.ItemMoveLocation.UnitPack, LogicHuman.ItemsPack.Count);
                 item = LogicHuman.TakeItemFromBody((MapUnit.BodySlot)item.Class.Option.Slot);
-                LogicHuman.ItemsPack.PutItem(LogicHuman.ItemsPack.Count, item);
+                if (item != null)
+                    LogicHuman.ItemsPack.PutItem(LogicHuman.ItemsPack.Count, item);
             }
 
             return true;
@@ -399,18 +400,20 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
         if (item == null)
             return false;
         //item = LogicHuman.TakeItemFromBody((MapUnit.BodySlot)item.Class.Option.Slot);
-        LogicHuman.DoUpdateInfo = true;
+        LogicHuman.RenderInfoVersion++;
         UiManager.Instance.StartDrag(item, 1, 0, () =>
         {
             // put item back to body if cancelled
             //LogicHuman.PutItemToBody((MapUnit.BodySlot)item.Class.Option.Slot, item);
-            LogicHuman.DoUpdateInfo = true;
+            LogicHuman.RenderInfoVersion++;
         });
         return true;
     }
 
     public override bool ProcessDrag(Item item, float mousex, float mousey)
     {
+        if (item.Parent.Parent != LogicHuman)
+            return false;
         if (LogicHuman.Player != MapLogic.Instance.ConsolePlayer)
             return false;
         if (!LogicHuman.IsItemUsable(item))
@@ -433,6 +436,11 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
         else if (item.Parent == LogicHuman.ItemsPack)
         {
             from = ServerCommands.ItemMoveLocation.UnitPack;
+            fromIndex = item.Index;
+        }
+        else if (item.Parent.LocationHint != ServerCommands.ItemMoveLocation.Undefined)
+        {
+            from = item.Parent.LocationHint;
             fromIndex = item.Index;
         }
         else from = ServerCommands.ItemMoveLocation.Ground;
@@ -470,12 +478,12 @@ public class MapViewHuman : MapViewUnit, IUiItemAutoDropper
 
     public override void ProcessEndDrag()
     {
-        LogicHuman.DoUpdateInfo = true;
+        LogicHuman.RenderInfoVersion++;
     }
 
-    public override void ProcessFailDrag()
+    public override void ProcessRollbackDrag(Item item)
     {
-        
+        LogicHuman.PutItemToBody((MapUnit.BodySlot)item.Class.Option.Slot, item);
     }
 
     public override Item ProcessVerifyEndDrag()
