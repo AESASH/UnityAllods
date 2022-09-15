@@ -1,11 +1,5 @@
 # UnityAllods
 
-The project's goal is to implement an opensource port of an old russian RPG/RTS hybrid game called Rage of Mages II.
-You will need the RES files from ROM2 installation in the root directory.
+The project has been forked from jewalky/UnityAllods
 
-Additionally, in the current state, the only way to run the game is opening the console (~ key)
-and typing "map &lt;filename&gt;", where filename is any file in ROM2 format (.alm);
-
-UPDATE: Project was migrated to newer Unity 2018.3.1f1 version, so any 2018.3.x will be compatible.
-
-One of the more recent showcases https://www.youtube.com/watch?v=bXFImzXF970
+UPDATE: Project has migrated to Unity 2021.3.9f1 

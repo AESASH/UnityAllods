@@ -37,7 +37,7 @@ public class MapViewMiniMap : MonoBehaviour, IUiEventProcessor
 
     private void PushTexture()
     {
-        MapTexture.Resize(MapWidth, MapHeight);
+        MapTexture.Reinitialize(MapWidth, MapHeight);
         MapTexture.SetPixels(MapTextureColors);
         MapTexture.Apply(false);
         TexRenderer.material.mainTexture = MapTexture;
