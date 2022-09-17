@@ -32,19 +32,19 @@ public class Locale
     {
         Initialized = true;
 
-        Main = new StringFile("main/text/main.txt").Strings;
-        Dialogs = new StringFile("main/text/dialogs.txt").Strings;
-        Building = new StringFile("main/text/building.txt").Strings;
-        UnitName = new StringFile("main/text/unitname.txt").Strings;
+        Main = new StringFile("locale/en/main.txt").Strings;
+        Dialogs = new StringFile("locale/en/dialogs.txt").Strings;
+        Building = new StringFile("locale/en/building.txt").Strings;
+        UnitName = new StringFile("locale/en/unitname.txt").Strings;
 
-        ItemServ = new StringFile("main/text/itemserv.txt").Strings;
-        ItemName = new StringFile("main/text/itemname.txt").Strings;
-        Stats = new StringFile("main/text/stats.txt").Strings;
+        ItemServ = new StringFile("locale/en/itemserv.txt").Strings;
+        ItemName = new StringFile("locale/en/itemname.txt").Strings;
+        Stats = new StringFile("locale/en/stats.txt").Strings;
 
-        Spell = new StringFile("main/text/spell.txt").Strings;
-        Spells = new StringFile("main/text/spells.txt").Strings;
+        Spell = new StringFile("locale/en/spell.txt").Strings;
+        Spells = new StringFile("locale/en/spells.txt").Strings;
 
-        Patch = new StringFile("patch/patch.txt").Strings;
+        Patch = new StringFile("locale/en/patch.txt").Strings;
     }
 
     private static Dictionary<string, List<string>> ListsByName;

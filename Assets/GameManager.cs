@@ -7,13 +7,26 @@ using System.Collections;
 using System.Threading;
 using System.IO;
 
-public class GameManager : MonoBehaviour
+public class GameManager : MonoBehaviour // The ":" means that GameManager inherits from MonoBehaviour
 {
+    // A Delegate declaration determines the methods that can be referenced by the delegate
+    //      In this case the delager is used to reference any methods that has no input parameter
+    //      and returns a bool type variable
     public delegate bool LoadCoroutine();
 
+    // A static variable has a single copy of the variable created and shared
+    // among all objects at the class level.
+    // This is a variable of type GameManager set to null
     private static GameManager _Instance = null;
+
+    // This is a read property (since it only has get) that allows the user to access the
+    // private variable '_Instance'
+    // Note:    A property is a method that provides a flexible mechanism to read, write,
+    //          or compute the value of a private field
     public static GameManager Instance
     {
+        // The 'get' keyword defines an accessor method in a property or indexer
+        // that returns the property value or the indexer element
         get
         {
             if (_Instance == null) _Instance = FindObjectOfType<GameManager>();
@@ -25,7 +38,7 @@ public class GameManager : MonoBehaviour
     {
         if (ResourceManager.FileExists("server.cfg"))
         {
-            StringFile sf = new StringFile("server.cfg");
+            StringFile sf = new StringFile("server.cfg"); // Searched for "server.cfg" file
             // execute all commands from there
             foreach (string cmd in sf.Strings)
             {
@@ -41,7 +54,7 @@ public class GameManager : MonoBehaviour
     // since this is a part of global state
     private bool _IsHeadlessChecked = false;
     private bool _IsHeadless = false;
-    public bool IsHeadless
+    public bool IsHeadless // Another property to access a private bool _IsHeadless
     {
         get
         {
@@ -62,11 +75,11 @@ public class GameManager : MonoBehaviour
 
     void Awake()
     {
+        Debug.LogFormat("GameManager.Awake\n");
         // system Unity configuration
-        QualitySettings.vSyncCount = 0;
-        Application.targetFrameRate = Application.isBatchMode ? 10 : 60;
+        QualitySettings.vSyncCount = 0; // 0 =  Do nothing
+        Application.targetFrameRate = Application.isBatchMode ? 10 : 60; // True:10, else 60
 
-        //
         pMainThreadId = Thread.CurrentThread.ManagedThreadId;
         _Instance = this; // force set. through this field, other threads will access mapview.
         Locale.InitLocale(); // load locale strings, like main.txt, patch.txt, etc
@@ -74,6 +87,7 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
+        Debug.LogFormat("GameManager.Start\n");
         GameConsole = Utils.CreateObjectWithScript<GameConsole>();
         GameConsole.transform.parent = UiManager.Instance.transform;
     }
@@ -135,7 +149,8 @@ public class GameManager : MonoBehaviour
     {
         // initiate resource load.
         if (!ClassLoadThreadDone)
-        {
+        {   
+            Debug.LogFormat("GameManager.Update_1\n");
             GameConsole.ConsoleEnabled = false;
             MapView.gameObject.SetActive(false);
             MouseCursor.SetCursor(MouseCursor.CurWait);
@@ -148,6 +163,7 @@ public class GameManager : MonoBehaviour
         }
         else if (ClassLoadThreadDone && ClassLoadThread != null)
         {
+            Debug.LogFormat("GameManager.Update_2\n");
             GameConsole.ConsoleEnabled = true;
             MapView.gameObject.SetActive(true);
             ClassLoadThread = null;
@@ -159,6 +175,7 @@ public class GameManager : MonoBehaviour
 
         lock (pDelegates)
         {
+            Debug.LogFormat("GameManager.Update_3\n");
             for (int i = 0; i < pDelegates.Count; i++)
                 StartCoroutine(DelegateCoroutine(pDelegates[i]));
             pDelegates.Clear();

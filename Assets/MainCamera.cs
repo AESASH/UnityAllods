@@ -65,7 +65,7 @@ public class MainCamera : MonoBehaviour
         camera.projectionMatrix *= Matrix4x4.Scale(new Vector3(100, -100, 1));*/
         cam.transform.Translate((float)_Width / 2, (float)_Height / 2, 0, Space.World);
         cam.projectionMatrix *= Matrix4x4.Scale(new Vector3(1, -1, 1));
-        Debug.LogFormat("{0}x{1}", _Width, _Height);
+        //Debug.LogFormat("{0}x{1}", _Width, _Height);
 
         Application.targetFrameRate = -1;
 

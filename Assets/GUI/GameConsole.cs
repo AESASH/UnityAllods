@@ -7,7 +7,7 @@ using UnityEngine;
 public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBackground
 {
     private static GameConsole _Instance = null;
-    public static GameConsole Instance
+    public static GameConsole Instance // property to access _Instance
     {
         get
         {
