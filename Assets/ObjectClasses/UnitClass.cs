@@ -213,7 +213,7 @@ public class UnitClassLoader
         {
             string filename = reg.GetString("Files", string.Format("File{0}", i), "");
             UnitFile file = new UnitFile();
-            file.FileName = "graphics/units/" + filename.Replace('\\', '/');
+            file.FileName = "graphics/units/" + filename.ToLower().Replace('\\', '/'); // Dorath Modified
             Files.Add(file);
         }
 
@@ -476,7 +476,7 @@ public class UnitClassLoader
                 }
             }
             cls.Dying = GetUnitClassById(cls.DyingID);
-            cls.InfoPicture = "graphics/infowindow/" + cls.InfoPicture;
+            cls.InfoPicture = "graphics/infowindow/" + cls.InfoPicture.ToLower().Replace('\\', '/'); // Dorath Modified
         }
 
         // init human hero classes

@@ -44,6 +44,7 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
 
     public void Start()
     {
+        Debug.LogFormat("GameConsole.Start\n");
         UiManager.Instance.Subscribe(this);
         CommandHistory.Add("");
 
@@ -93,6 +94,7 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
         };
 
         WriteLine("Welcome to UnityAllods!");
+        Debug.LogFormat("GameConsole.Start_Ends\n");
     }
 
     public bool ProcessEvent(Event e)
@@ -241,6 +243,7 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
 
     public bool ExecuteCommand(string cmd)
     {
+        //Debug.LogFormat("GameConsole.ExecuteCommand: {0}\n", cmd);
         if (cmd.Trim().Length <= 0)
             return false;
 

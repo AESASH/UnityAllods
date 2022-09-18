@@ -106,17 +106,25 @@ public class Config
             }
 
             sw.Flush();
+            //Debug.LogFormat("Config.Save\n");
         }
     }
 
     public static void Load()
     {
+        //Debug.LogFormat("Config.Load\n");
         if (ResourceManager.FileExists("unityallods.cfg"))
         {
             StringFile sf = new StringFile("unityallods.cfg");
             foreach (string cmd in sf.Strings)
                 GameConsole.Instance.ExecuteCommand(cmd);
+            
         }
-        else Save();
+        else 
+        {   
+            //Debug.LogFormat("Config.Load.FileNotFound\n");
+            Save();
+        }
+
     }
 }

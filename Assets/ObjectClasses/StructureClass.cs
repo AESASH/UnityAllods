@@ -102,8 +102,9 @@ public class StructureClassLoader
             string file = reg.GetString(on, "File", null);
             if (file != null)
             {
+                //Debug.LogFormat("StrcutureClass.InitClasses.Registry_File:{0}\n", file);
                 StructureFile sfile = new StructureFile();
-                sfile.FileName = "graphics/structures/" + file;
+                sfile.FileName = "graphics/structures/" + file.ToLower().Replace("\\", "/"); // Dorath Modified
                 cls.File = sfile;
             }
             cls.TileWidth = reg.GetInt(on, "TileWidth", 1);
@@ -154,7 +155,8 @@ public class StructureClassLoader
                     }
                 }
             }
-            cls.Picture = "graphics/infowindow/" + reg.GetString(on, "Picture", "") + ".bmp";
+            string pic = reg.GetString(on, "Picture", ""); // Dorath modified
+            cls.Picture = "graphics/infowindow/" +  pic.ToLower().Replace("\\", "/") + ".bmp";
             cls.IconID = reg.GetInt(on, "IconID", StructureClass.MagicIntNull);
             cls.Indestructible = reg.GetInt(on, "Indestructible", 0)!=0;
             cls.Usable = reg.GetInt(on, "Usable", 0)!=0;

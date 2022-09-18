@@ -150,7 +150,6 @@ public class GameManager : MonoBehaviour // The ":" means that GameManager inher
         // initiate resource load.
         if (!ClassLoadThreadDone)
         {   
-            Debug.LogFormat("GameManager.Update_1\n");
             GameConsole.ConsoleEnabled = false;
             MapView.gameObject.SetActive(false);
             MouseCursor.SetCursor(MouseCursor.CurWait);
@@ -163,7 +162,6 @@ public class GameManager : MonoBehaviour // The ":" means that GameManager inher
         }
         else if (ClassLoadThreadDone && ClassLoadThread != null)
         {
-            Debug.LogFormat("GameManager.Update_2\n");
             GameConsole.ConsoleEnabled = true;
             MapView.gameObject.SetActive(true);
             ClassLoadThread = null;
@@ -175,7 +173,6 @@ public class GameManager : MonoBehaviour // The ":" means that GameManager inher
 
         lock (pDelegates)
         {
-            Debug.LogFormat("GameManager.Update_3\n");
             for (int i = 0; i < pDelegates.Count; i++)
                 StartCoroutine(DelegateCoroutine(pDelegates[i]));
             pDelegates.Clear();

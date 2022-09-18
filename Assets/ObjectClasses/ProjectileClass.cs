@@ -58,7 +58,8 @@ public class ProjectileClassLoader
             string on = string.Format("Projectile{0}", i);
             ProjectileClass cls = new ProjectileClass();
             cls.ID = reg.GetInt(on, "ID", -1);
-            cls.FileName = "graphics/projectiles/"+reg.GetString(on, "File", "");
+            string file = reg.GetString(on, "File", ""); // Dorath Modifies
+            cls.FileName = "graphics/projectiles/"+file.ToLower().Replace("\\", "/");  // Dorath Modifies
             cls.Is16A = reg.GetInt(on, "A16", 0) != 0;
             cls.FileName += cls.Is16A ? ".16a" : ".256";
             cls.Phases = reg.GetInt(on, "Phases", 0);

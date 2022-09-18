@@ -80,7 +80,7 @@ public class ObstacleClassLoader
         {
             string filename = reg.GetString("Files", string.Format("File{0}", i), "");
             ObstacleFile file = new ObstacleFile();
-            file.FileName = "graphics/objects/" + filename.Replace('\\', '/');
+            file.FileName = "graphics/objects/" + filename.ToLower().Replace('\\', '/'); // Dorath Modified
             Files.Add(file);
         }
 
