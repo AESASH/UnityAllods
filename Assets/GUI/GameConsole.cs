@@ -99,10 +99,8 @@ public class GameConsole : MonoBehaviour, IUiEventProcessor, IUiEventProcessorBa
 
     public bool ProcessEvent(Event e)
     {
-        if ((e.type == EventType.KeyDown &&
-             e.keyCode == KeyCode.BackQuote && e.shift) ||
-            (e.type == EventType.KeyDown &&
-             (e.keyCode == KeyCode.BackQuote || e.keyCode == KeyCode.Escape) && ConsoleActive))
+        if ((e.type == EventType.KeyDown && e.keyCode == KeyCode.BackQuote) || // Dorath Modified Remove LeftShit and RightShift
+            (e.type == EventType.KeyDown && (e.keyCode == KeyCode.BackQuote || e.keyCode == KeyCode.Escape) && ConsoleActive)) 
         {
             ConsoleActive = !ConsoleActive;
             if (ConsoleActive)
